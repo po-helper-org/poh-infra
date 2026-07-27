@@ -1,0 +1,8 @@
+name: docker
+type: server
+image: mcp/poh-docker:latest
+description: Manage local Docker containers, images, compose (ckreiling mcp-server-docker).
+title: Docker (container control)
+longLived: true
+volumes:
+  - "/var/run/docker.sock:/var/run/docker.sock"

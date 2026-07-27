@@ -1,0 +1,8 @@
+name: repowise
+type: server
+image: mcp/poh-repowise:latest
+description: Codebase documentation engine (repowise) — overview, health, risk, dead code, semantic search, dependency paths.
+title: Repowise
+longLived: true
+volumes:
+  - "{{repowise.mount}}"

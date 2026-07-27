@@ -1,0 +1,9 @@
+name: postgres
+type: server
+image: crystaldba/postgres-mcp:latest
+description: Postgres access — schema inspection and SQL (crystaldba postgres-mcp).
+title: Postgres
+longLived: true
+secrets:
+  - name: postgres.database_uri
+    env: DATABASE_URI

@@ -1,0 +1,12 @@
+name: dokploy
+type: server
+image: mcp/poh-dokploy:latest
+description: Dokploy PaaS — manage projects, applications, databases, domains, deployments via the Dokploy API.
+title: Dokploy
+longLived: true
+env:
+  - name: DOKPLOY_URL
+    value: "{{dokploy.url}}"
+secrets:
+  - name: dokploy.api_key
+    env: DOKPLOY_API_KEY

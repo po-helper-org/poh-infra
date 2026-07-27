@@ -1,0 +1,5 @@
+FROM node:22-slim
+RUN npm install -g backlog.md@1.44.0
+ENV BACKLOG_CWD=/workspace
+WORKDIR /workspace
+ENTRYPOINT ["backlog", "mcp", "start"]

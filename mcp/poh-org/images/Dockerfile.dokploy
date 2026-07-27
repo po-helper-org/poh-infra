@@ -1,0 +1,4 @@
+FROM node:22-alpine
+RUN npm install -g @dokploy/mcp
+# Bin name confirmed at build (dokploy-mcp). Fallback: npx -y @dokploy/mcp
+ENTRYPOINT ["dokploy-mcp"]

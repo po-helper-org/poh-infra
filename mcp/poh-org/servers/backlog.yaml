@@ -1,0 +1,8 @@
+name: backlog
+type: server
+image: mcp/poh-backlog:latest
+description: Backlog.md task management — list/create/edit tasks stored as Markdown in the repo backlog.
+title: Backlog.md
+longLived: true
+volumes:
+  - "{{backlog.mount}}"
