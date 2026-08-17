@@ -1,0 +1,225 @@
+# Harness контура производства — весь цикл одним конфигом.
+#
+# Issue-Agent, PR-Agent и Temporal живут в отдельных репозиториях со своими
+# релизными циклами, и каждый умеет подниматься сам. Но связать их — значит
+# согласовать руками два GitHub App, общий секрет докладов, адрес соседа и
+# namespace Temporal; ровно на этом согласовании контур и рвался. Здесь связка
+# записана один раз.
+#
+#   GitHub ──webhook──▶ caddy ──/issue/*──▶ issue-webhook ──▶ Temporal ──▶ issue-worker
+#                         │                                                     │
+#                         │                                          workflow_dispatch
+#                         │                                                     ▼
+#                         └──/pr/*──▶ pr-ingress ─▶ pr-worker         OpenHands (Actions)
+#                                                       │                       │
+#                                                       └──── /agent-event ◀────┘
+#
+# Образы собираются ПРЯМО ИЗ git-репозиториев: копия исходников рядом не нужна,
+# и версия сервиса не может незаметно разойтись с тем, что в main. Ветку каждого
+# сервиса задаёт переменная — так отлаживают доработку, не трогая compose.
+#
+# Запуск:  cp .env.example .env && $EDITOR .env && docker compose up -d --build
+# Проверка: curl -fsS http://localhost:${HARNESS_PORT:-8080}/health
+
+x-issue-env: &issue-env
+  # --- аутентификация в GitHub ---
+  # Имена внутри сервисов совпадают у обоих агентов (GITHUB_APP_ID и т.д.), а
+  # приложения РАЗНЫЕ: у Issue-Agent свои права и свои события, у PR-Agent свои.
+  # Поэтому в harness они разведены префиксом и раскладываются здесь.
+  GITHUB_APP_ID: "${ISSUE_APP_ID:-}"
+  GITHUB_PRIVATE_KEY_B64: "${ISSUE_APP_PRIVATE_KEY_B64:-}"
+  GITHUB_WEBHOOK_SECRET: "${ISSUE_APP_WEBHOOK_SECRET:?задай ISSUE_APP_WEBHOOK_SECRET}"
+  GH_TOKEN: "${GH_TOKEN:-}"
+  ISSUE_AGENT_REPOS: "${WATCHED_REPOS:?задай WATCHED_REPOS}"
+  GITHUB_REPOSITORY: "${DEFAULT_REPO:-}"
+
+  # --- Temporal (встроенный) ---
+  TEMPORAL_ADDRESS: "temporal:7233"
+  TEMPORAL_NAMESPACE: "default"
+  TEMPORAL_SEARCH_ATTRIBUTES: "${TEMPORAL_SEARCH_ATTRIBUTES:-}"
+
+  # --- модель ---
+  ZAI_BASE_URL: "${ZAI_BASE_URL:-https://api.z.ai/api/coding/paas/v4}"
+  ZAI_API_KEY: "${ZAI_API_KEY:?задай ZAI_API_KEY}"
+  MODEL_GATE: "${MODEL_GATE:-glm-4.5-air}"
+  MODEL_CLASSIFY: "${MODEL_CLASSIFY:-glm-4.6}"
+
+  # --- контур ---
+  # Тот же секрет, что у PR-Agent ниже: это две стороны одного канала. Пусто →
+  # /agent-event закрыт (503), и доклады о PR и ревью не дойдут — цикл останется
+  # ждать в in-development навсегда.
+  AGENT_EVENT_SECRET: "${AGENT_EVENT_SECRET:?задай AGENT_EVENT_SECRET}"
+  DEVELOP_ENABLED: "${DEVELOP_ENABLED:-}"
+  DEVELOP_AUTOSTART: "${DEVELOP_AUTOSTART:-}"
+  DEVELOP_WORKFLOW_FILE: "${DEVELOP_WORKFLOW_FILE:-openhands-resolver.yml}"
+  DEVELOP_REF: "${DEVELOP_REF:-main}"
+  AGENT_TRIGGER_ALLOWLIST: "${AGENT_TRIGGER_ALLOWLIST:-}"
+
+  # --- сроки парковок ---
+  PARK_DECISION_HOURS: "${PARK_DECISION_HOURS:-72}"
+  PARK_CLARIFICATION_HOURS: "${PARK_CLARIFICATION_HOURS:-48}"
+  PARK_BUILD_HOURS: "${PARK_BUILD_HOURS:-72}"
+  PARK_SIDE_STATE_HOURS: "${PARK_SIDE_STATE_HOURS:-168}"
+
+  # --- режим и наблюдаемость ---
+  DRY_RUN: "${DRY_RUN:-1}"
+  SENTRY_DSN: "${SENTRY_DSN:-}"
+  SENTRY_ENVIRONMENT: "${SENTRY_ENVIRONMENT:-harness}"
+  PYTHONUNBUFFERED: "1"
+
+x-pr-env: &pr-env
+  OPENAI_KEY: "${ZAI_API_KEY:?задай ZAI_API_KEY}"
+  OPENAI_API_BASE: "${ZAI_BASE_URL:-https://api.z.ai/api/coding/paas/v4}"
+  CONFIG_MODEL: "${PR_AGENT_MODEL:-openai/glm-4.6}"
+  CONFIG_AI_TIMEOUT: "${CONFIG_AI_TIMEOUT:-600}"
+  GITHUB_APP_ID: "${PR_APP_ID:?задай PR_APP_ID}"
+  GITHUB_PRIVATE_KEY_B64: "${PR_APP_PRIVATE_KEY_B64:?задай PR_APP_PRIVATE_KEY_B64}"
+  GITHUB_WEBHOOK_SECRET: "${PR_APP_WEBHOOK_SECRET:?задай PR_APP_WEBHOOK_SECRET}"
+  RELIABILITY_DB: "/data/reliability.db"
+  RELIABILITY_QUEUE: "/data/queue.db"
+  RELIABILITY_MAX_ATTEMPTS: "${RELIABILITY_MAX_ATTEMPTS:-5}"
+  # Адрес соседа — внутренний, не публичный: доклад идёт по сети compose и
+  # наружу не выходит вовсе. Публичный URL здесь означал бы, что событие о фазе
+  # задачи делает петлю через интернет без всякой причины.
+  ISSUE_AGENT_URL: "http://issue-webhook:3000"
+  AGENT_EVENT_SECRET: "${AGENT_EVENT_SECRET:?задай AGENT_EVENT_SECRET}"
+  SENTRY_DSN: "${SENTRY_DSN:-}"
+  SENTRY_ENVIRONMENT: "${SENTRY_ENVIRONMENT:-harness}"
+
+services:
+  # ─────────────────────────── Temporal ───────────────────────────
+
+  postgres:
+    image: postgres:16
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: temporal
+      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD:?задай POSTGRES_PASSWORD (openssl rand -hex 24)}"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U temporal"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  temporal:
+    image: temporalio/auto-setup:1.24
+    restart: unless-stopped
+    environment:
+      DB: postgres12
+      DB_PORT: "5432"
+      POSTGRES_USER: temporal
+      POSTGRES_PWD: "${POSTGRES_PASSWORD:?задай POSTGRES_PASSWORD}"
+      POSTGRES_SEEDS: postgres
+    expose: ["7233"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  temporal-ui:
+    image: temporalio/ui:2.31.2
+    restart: unless-stopped
+    environment:
+      TEMPORAL_ADDRESS: temporal:7233
+      # UI отдаётся под префиксом /temporal через caddy — CORS должен знать
+      # публичный адрес, иначе браузер режет собственные запросы страницы.
+      TEMPORAL_CORS_ORIGINS: "${PUBLIC_URL:-http://localhost:8080}"
+    expose: ["8080"]
+    depends_on: [temporal]
+
+  # ────────────────────────── Issue-Agent ─────────────────────────
+
+  issue-webhook:
+    build:
+      context: "${ISSUE_AGENT_REPO:-https://github.com/po-helper-org/poh-issue-agents.git}#${ISSUE_AGENT_REF:-main}"
+      dockerfile: webhook/Dockerfile
+    image: poh-issue-agent-webhook:harness
+    restart: unless-stopped
+    environment: *issue-env
+    expose: ["3000"]
+    depends_on: [temporal]
+
+  issue-worker:
+    build:
+      context: "${ISSUE_AGENT_REPO:-https://github.com/po-helper-org/poh-issue-agents.git}#${ISSUE_AGENT_REF:-main}"
+      dockerfile: worker/Dockerfile
+    image: poh-issue-agent-worker:harness
+    restart: unless-stopped
+    environment: *issue-env
+    depends_on: [temporal]
+
+  # ─────────────────────────── PR-Agent ───────────────────────────
+
+  # Одноразовая сборка апстрим-образа: не «служит», только тегирует образ, от
+  # которого наследуется reliability. /bin/true → контейнер сразу выходит.
+  pr-agent-base:
+    build:
+      context: https://github.com/qodo-ai/pr-agent.git
+      dockerfile: docker/Dockerfile
+      target: github_app
+    image: pr-agent-github-app:local
+    entrypoint: ["/bin/true"]
+    restart: "no"
+
+  pr-ingress:
+    build:
+      context: "${PR_AGENT_REPO:-https://github.com/po-helper-org/poh-pr-agents.git}#${PR_AGENT_REF:-main}:self-hosted"
+      dockerfile: Dockerfile.reliability
+    image: pr-agent-reliability:harness
+    restart: unless-stopped
+    depends_on: [pr-agent-base]
+    environment: *pr-env
+    command: ["uvicorn", "reliability.app:app", "--host", "0.0.0.0", "--port", "3000"]
+    volumes: [pr-data:/data]
+    expose: ["3000"]
+
+  pr-worker:
+    image: pr-agent-reliability:harness
+    restart: unless-stopped
+    depends_on: [pr-ingress]
+    environment:
+      <<: *pr-env
+      # Инвариант порядка: CONFIG_AI_TIMEOUT ≤ ATTEMPT < TASK < VISIBILITY.
+      # Меняешь один — держи порядок, иначе внешний слой рвёт идущее ревью либо
+      # плодит дубль в очереди.
+      RELIABILITY_ATTEMPT_TIMEOUT: "${RELIABILITY_ATTEMPT_TIMEOUT:-630}"
+      RELIABILITY_TASK_TIMEOUT: "${RELIABILITY_TASK_TIMEOUT:-660}"
+      RELIABILITY_VISIBILITY_TIMEOUT: "${RELIABILITY_VISIBILITY_TIMEOUT:-720}"
+      RELIABILITY_LLM_RPS: "${RELIABILITY_LLM_RPS:-3}"
+      RELIABILITY_BACKOFF: "${RELIABILITY_BACKOFF:-10}"
+    command: ["python", "-m", "reliability.worker"]
+    volumes: [pr-data:/data]
+
+  pr-sweeper:
+    image: pr-agent-reliability:harness
+    restart: unless-stopped
+    depends_on: [pr-ingress]
+    environment:
+      <<: *pr-env
+      # Тот же список репозиториев, что следит Issue-Agent: два агента одного
+      # контура, разъехавшийся охват означал бы PR без ревью либо ревью без
+      # задачи.
+      RELIABILITY_REPOS: "${WATCHED_REPOS:?задай WATCHED_REPOS}"
+      RELIABILITY_COMMANDS: "${RELIABILITY_COMMANDS:-/describe,/review}"
+      RELIABILITY_SWEEP_INTERVAL: "${RELIABILITY_SWEEP_INTERVAL:-300}"
+    command: ["python", "-m", "reliability.sweeper_runner"]
+    volumes: [pr-data:/data]
+
+  # ──────────────────────── Публичный вход ────────────────────────
+
+  # Один хост наружу вместо трёх портов. Два GitHub App шлют вебхуки на разные
+  # пути одного домена, и это единственный адрес, который приходится где-либо
+  # прописывать.
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - "${HARNESS_PORT:-8080}:80"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+    depends_on: [issue-webhook, pr-ingress, temporal-ui]
+
+volumes:
+  pgdata:
+  pr-data:

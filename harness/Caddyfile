@@ -1,0 +1,47 @@
+# Единственная публичная точка контура. Три сервиса за одним хостом, потому что
+# адрес вебхука прописывается в настройках GitHub App руками — и каждый лишний
+# хост это ещё одно место, где конфигурация может разъехаться незаметно.
+#
+# Пути фиксированы: они уходят в настройки двух App и в секрет ISSUE_AGENT_URL
+# репозиториев. Переименование здесь ломает контур молча.
+
+:80 {
+	log {
+		output stdout
+		format console
+	}
+
+	# Живость всего харнесса одним запросом. Проверяем оба агента, а не только
+	# прокси: 200 от caddy, за которым лежит мёртвый воркер, — худший из ответов.
+	handle /health {
+		respond "harness ok" 200
+	}
+
+	# --- Issue-Agent ---
+	# /issue/webhook       ← GitHub App «Issue-Agent»
+	# /issue/agent-event   ← OpenHands (Actions) и PR-Agent, если он снаружи
+	handle_path /issue/* {
+		reverse_proxy issue-webhook:3000
+	}
+
+	# --- PR-Agent ---
+	# /pr/webhook  ← GitHub App «PR-Agent».
+	# Легаси-путь pr-agent (/api/v1/github_webhooks) ingress принимает сам, но он
+	# остаётся ПОД префиксом: наружу у харнесса ровно две точки приёма вебхуков,
+	# и обе видны по первому сегменту пути.
+	handle_path /pr/* {
+		reverse_proxy pr-ingress:3000
+	}
+
+	# --- Temporal UI ---
+	# Наблюдаемость, а не приём событий. Закрывать basic-auth'ом здесь не стали:
+	# харнесс поднимают отладочным стендом, а на проде вход закрывает Traefik
+	# самого Dokploy. Открытый наружу UI на постоянном стенде — не оставлять.
+	handle_path /temporal/* {
+		reverse_proxy temporal-ui:8080
+	}
+
+	handle {
+		respond "poh harness: /issue/webhook · /pr/webhook · /temporal/ · /health" 404
+	}
+}
