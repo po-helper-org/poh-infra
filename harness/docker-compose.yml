@@ -15,8 +15,16 @@
 #                                                       └──── /agent-event ◀────┘
 #
 # Образы собираются ПРЯМО ИЗ git-репозиториев: копия исходников рядом не нужна,
-# и версия сервиса не может незаметно разойтись с тем, что в main. Ветку каждого
-# сервиса задаёт переменная — так отлаживают доработку, не трогая compose.
+# и версия сервиса не может незаметно разойтись с тем, что в main.
+#
+# Контекст задаётся ОДНОЙ переменной целиком, а не парой «репозиторий + ветка»:
+# в неё кладут и `…git#ветка`, и локальный путь к рабочей копии. Пара ломалась
+# на втором: путь с суффиксом `#ref` — не путь. А отлаживать доработку, собирая
+# её из уже запушенного main, значит проверять не то, что правишь.
+#
+# ВАЖНО про git-контекст: BuildKit кэширует клон по URL, и `build` после нового
+# коммита в ту же ветку может молча собрать прежний код. На отладке ставь
+# локальный путь; на стенде добавляй `--no-cache`, когда ветка не менялась.
 #
 # Запуск:  cp .env.example .env && $EDITOR .env && docker compose up -d --build
 # Проверка: curl -fsS http://localhost:${HARNESS_PORT:-8080}/health
@@ -62,7 +70,12 @@ x-issue-env: &issue-env
   PARK_SIDE_STATE_HOURS: "${PARK_SIDE_STATE_HOURS:-168}"
 
   # --- режим и наблюдаемость ---
-  DRY_RUN: "${DRY_RUN:-1}"
+  # `${VAR-default}` без двоеточия: пустое значение здесь ЗНАЧИМО и означает
+  # боевой режим. С `:-` пустая строка считалась бы «не задано», подставлялся
+  # бы дефолт `1`, и выключение DRY_RUN не срабатывало бы вовсе — стадии
+  # проходят, в GitHub не появляется ничего, и выглядит это как исправная
+  # работа.
+  DRY_RUN: "${DRY_RUN-1}"
   SENTRY_DSN: "${SENTRY_DSN:-}"
   SENTRY_ENVIRONMENT: "${SENTRY_ENVIRONMENT:-harness}"
   PYTHONUNBUFFERED: "1"
@@ -136,7 +149,7 @@ services:
 
   issue-webhook:
     build:
-      context: "${ISSUE_AGENT_REPO:-https://github.com/po-helper-org/poh-issue-agents.git}#${ISSUE_AGENT_REF:-main}"
+      context: "${ISSUE_AGENT_CONTEXT:-https://github.com/po-helper-org/poh-issue-agents.git#main}"
       dockerfile: webhook/Dockerfile
     image: poh-issue-agent-webhook:harness
     restart: unless-stopped
@@ -146,7 +159,7 @@ services:
 
   issue-worker:
     build:
-      context: "${ISSUE_AGENT_REPO:-https://github.com/po-helper-org/poh-issue-agents.git}#${ISSUE_AGENT_REF:-main}"
+      context: "${ISSUE_AGENT_CONTEXT:-https://github.com/po-helper-org/poh-issue-agents.git#main}"
       dockerfile: worker/Dockerfile
     image: poh-issue-agent-worker:harness
     restart: unless-stopped
@@ -170,7 +183,7 @@ services:
   pr-ingress:
     profiles: ["pr"]
     build:
-      context: "${PR_AGENT_REPO:-https://github.com/po-helper-org/poh-pr-agents.git}#${PR_AGENT_REF:-main}:self-hosted"
+      context: "${PR_AGENT_CONTEXT:-https://github.com/po-helper-org/poh-pr-agents.git#main:self-hosted}"
       dockerfile: Dockerfile.reliability
     image: pr-agent-reliability:harness
     restart: unless-stopped
