@@ -10,7 +10,7 @@
 |---|---|
 | Приём вебхуков | `https://runtime-candles-slides-pro.trycloudflare.com/issue/webhook` |
 | Приём докладов агентов | `https://runtime-candles-slides-pro.trycloudflare.com/issue/agent-event` |
-| Temporal UI | http://localhost:8080/temporal/ |
+| Temporal UI | http://localhost:8080/temporal/ (напрямую — http://localhost:8233) |
 | Демо-репозиторий | https://github.com/po-helper-org/poh-demo-checkout |
 
 Адрес туннеля живёт часы и меняется при перезапуске. За этим следит сторож
