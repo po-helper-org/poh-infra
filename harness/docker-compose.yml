@@ -67,14 +67,18 @@ x-issue-env: &issue-env
   SENTRY_ENVIRONMENT: "${SENTRY_ENVIRONMENT:-harness}"
   PYTHONUNBUFFERED: "1"
 
+# Обязательность PR-переменных проверяется НЕ подстановкой, а на старте самого
+# сервиса (см. команду pr-ingress). Подстановка срабатывает на весь файл разом,
+# и жёсткий guard здесь не давал бы поднять issue-половину без второго App —
+# то есть не давал бы проверить первую половину вовсе.
 x-pr-env: &pr-env
   OPENAI_KEY: "${ZAI_API_KEY:?задай ZAI_API_KEY}"
   OPENAI_API_BASE: "${ZAI_BASE_URL:-https://api.z.ai/api/coding/paas/v4}"
   CONFIG_MODEL: "${PR_AGENT_MODEL:-openai/glm-4.6}"
   CONFIG_AI_TIMEOUT: "${CONFIG_AI_TIMEOUT:-600}"
-  GITHUB_APP_ID: "${PR_APP_ID:?задай PR_APP_ID}"
-  GITHUB_PRIVATE_KEY_B64: "${PR_APP_PRIVATE_KEY_B64:?задай PR_APP_PRIVATE_KEY_B64}"
-  GITHUB_WEBHOOK_SECRET: "${PR_APP_WEBHOOK_SECRET:?задай PR_APP_WEBHOOK_SECRET}"
+  GITHUB_APP_ID: "${PR_APP_ID:-}"
+  GITHUB_PRIVATE_KEY_B64: "${PR_APP_PRIVATE_KEY_B64:-}"
+  GITHUB_WEBHOOK_SECRET: "${PR_APP_WEBHOOK_SECRET:-}"
   RELIABILITY_DB: "/data/reliability.db"
   RELIABILITY_QUEUE: "/data/queue.db"
   RELIABILITY_MAX_ATTEMPTS: "${RELIABILITY_MAX_ATTEMPTS:-5}"
@@ -154,6 +158,7 @@ services:
   # Одноразовая сборка апстрим-образа: не «служит», только тегирует образ, от
   # которого наследуется reliability. /bin/true → контейнер сразу выходит.
   pr-agent-base:
+    profiles: ["pr"]
     build:
       context: https://github.com/qodo-ai/pr-agent.git
       dockerfile: docker/Dockerfile
@@ -163,6 +168,7 @@ services:
     restart: "no"
 
   pr-ingress:
+    profiles: ["pr"]
     build:
       context: "${PR_AGENT_REPO:-https://github.com/po-helper-org/poh-pr-agents.git}#${PR_AGENT_REF:-main}:self-hosted"
       dockerfile: Dockerfile.reliability
@@ -170,11 +176,23 @@ services:
     restart: unless-stopped
     depends_on: [pr-agent-base]
     environment: *pr-env
-    command: ["uvicorn", "reliability.app:app", "--host", "0.0.0.0", "--port", "3000"]
+    # Guard на старте вместо guard'а на подстановке: PR-Agent умеет только
+    # GitHub App (PAT-пути у него нет), и без ключа он поднялся бы и молча
+    # отвергал каждую доставку по 401.
+    command:
+      - sh
+      - -c
+      - |
+        [ -n "$$GITHUB_APP_ID" ] && [ -n "$$GITHUB_PRIVATE_KEY_B64" ] || {
+          echo "PR_APP_ID / PR_APP_PRIVATE_KEY_B64 не заданы — PR-Agent работает только как GitHub App" >&2
+          exit 1
+        }
+        exec uvicorn reliability.app:app --host 0.0.0.0 --port 3000
     volumes: [pr-data:/data]
     expose: ["3000"]
 
   pr-worker:
+    profiles: ["pr"]
     image: pr-agent-reliability:harness
     restart: unless-stopped
     depends_on: [pr-ingress]
@@ -192,6 +210,7 @@ services:
     volumes: [pr-data:/data]
 
   pr-sweeper:
+    profiles: ["pr"]
     image: pr-agent-reliability:harness
     restart: unless-stopped
     depends_on: [pr-ingress]
@@ -218,7 +237,9 @@ services:
       - "${HARNESS_PORT:-8080}:80"
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
-    depends_on: [issue-webhook, pr-ingress, temporal-ui]
+    # pr-ingress намеренно НЕ в depends_on: половина ревью включается профилем,
+    # и жёсткая зависимость не дала бы поднять вход без неё.
+    depends_on: [issue-webhook, temporal-ui]
 
 volumes:
   pgdata:
