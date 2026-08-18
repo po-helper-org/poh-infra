@@ -63,6 +63,15 @@ x-issue-env: &issue-env
   # выглядит это как «тумблер не работает».
   RESEARCH_AUTOSTART: "${RESEARCH_AUTOSTART:-}"
   DEVELOP_AUTOSTART: "${DEVELOP_AUTOSTART:-}"
+  # `local` — код пишется здесь же, одноразовым контейнером. `dispatch` —
+  # прогон уезжает в GitHub Actions репозитория-цели.
+  DEVELOP_MODE: "${DEVELOP_MODE:-local}"
+  DEVELOP_RUNNER_IMAGE: "${DEVELOP_RUNNER_IMAGE:-poh-openhands-runner:local}"
+  DEVELOP_WORKSPACE_VOLUME: "${DEVELOP_WORKSPACE_VOLUME:-poh-dev-workspace}"
+  DEVELOP_WORKSPACE_MOUNT: "/workspaces"
+  DEVELOP_MODEL: "${DEVELOP_MODEL:-openai/glm-4.6}"
+  DEVELOP_TEST_COMMAND: "${DEVELOP_TEST_COMMAND:-}"
+  DEVELOP_TIMEOUT_SEC: "${DEVELOP_TIMEOUT_SEC:-2700}"
   DEVELOP_WORKFLOW_FILE: "${DEVELOP_WORKFLOW_FILE:-openhands-resolver.yml}"
   DEVELOP_REF: "${DEVELOP_REF:-main}"
   AGENT_TRIGGER_ALLOWLIST: "${AGENT_TRIGGER_ALLOWLIST:-}"
@@ -170,6 +179,16 @@ services:
     expose: ["3000"]
     depends_on: [temporal]
 
+  # Образ агента разработки. Как и pr-agent-base — не сервис, а сборка: сам
+  # прогон поднимается воркером на время задачи и умирает вместе с ней.
+  openhands-runner:
+    build:
+      context: "${ISSUE_AGENT_CONTEXT:-https://github.com/po-helper-org/poh-issue-agents.git#main}"
+      dockerfile: openhands/Dockerfile
+    image: "${DEVELOP_RUNNER_IMAGE:-poh-openhands-runner:local}"
+    entrypoint: ["/bin/true"]
+    restart: "no"
+
   issue-worker:
     build:
       context: "${ISSUE_AGENT_CONTEXT:-https://github.com/po-helper-org/poh-issue-agents.git#main}"
@@ -177,7 +196,17 @@ services:
     image: poh-issue-agent-worker:harness
     restart: unless-stopped
     environment: *issue-env
-    depends_on: [temporal]
+    volumes:
+      # Общий том с раннером: воркер готовит каталог задачи и читает результат,
+      # раннер пишет. Bind-mount тут не годится — путь внутри воркера на хосте
+      # не существует, и раннер смонтировал бы пустоту.
+      - dev-workspace:/workspaces
+      # Сокет нужен, чтобы поднять одноразовый контейнер агента. Это осознанная
+      # уступка: воркер получает доступ к демону хоста. Взамен произвольный код
+      # чужого репозитория исполняется НЕ здесь, а в контейнере, который живёт
+      # минуты и не видит ни GitHub-токена, ни истории Temporal.
+      - /var/run/docker.sock:/var/run/docker.sock
+    depends_on: [temporal, openhands-runner]
 
   # ─────────────────────────── PR-Agent ───────────────────────────
 
@@ -270,3 +299,7 @@ services:
 volumes:
   pgdata:
   pr-data:
+  # Имя фиксировано: воркер передаёт его раннеру строкой в `docker run -v`,
+  # а тот запускается на хосте и compose-псевдонимов не знает.
+  dev-workspace:
+    name: "${DEVELOP_WORKSPACE_VOLUME:-poh-dev-workspace}"
