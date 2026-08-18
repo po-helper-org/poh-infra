@@ -58,6 +58,10 @@ x-issue-env: &issue-env
   # ждать в in-development навсегда.
   AGENT_EVENT_SECRET: "${AGENT_EVENT_SECRET:?задай AGENT_EVENT_SECRET}"
   DEVELOP_ENABLED: "${DEVELOP_ENABLED:-}"
+  # Две парковки основного пути — два тумблера. Пробрасывать надо ОБА: одна
+  # переменная в .env без пары в compose просто не доезжает до контейнера, и
+  # выглядит это как «тумблер не работает».
+  RESEARCH_AUTOSTART: "${RESEARCH_AUTOSTART:-}"
   DEVELOP_AUTOSTART: "${DEVELOP_AUTOSTART:-}"
   DEVELOP_WORKFLOW_FILE: "${DEVELOP_WORKFLOW_FILE:-openhands-resolver.yml}"
   DEVELOP_REF: "${DEVELOP_REF:-main}"
