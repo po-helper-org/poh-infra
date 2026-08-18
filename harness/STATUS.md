@@ -8,8 +8,8 @@
 
 | Что | Где |
 |---|---|
-| Приём вебхуков | `https://coordinator-poly-fixtures-recognised.trycloudflare.com/issue/webhook` |
-| Приём докладов агентов | `https://coordinator-poly-fixtures-recognised.trycloudflare.com/issue/agent-event` |
+| Приём вебхуков | `https://runtime-candles-slides-pro.trycloudflare.com/issue/webhook` |
+| Приём докладов агентов | `https://runtime-candles-slides-pro.trycloudflare.com/issue/agent-event` |
 | Temporal UI | http://localhost:8080/temporal/ |
 | Демо-репозиторий | https://github.com/po-helper-org/poh-demo-checkout |
 
@@ -18,6 +18,15 @@
 адрес в трёх местах — `PUBLIC_URL` харнесса, секрет `ISSUE_AGENT_URL`
 репозитория, `config.url` вебхука. Разошлись — прогон в Actions отработает и
 молча не доложит.
+
+Сторож проверяет **не «жив ли процесс», а «отвечает ли публичный адрес»**:
+cloudflared переживает разрыв связи с edge и остаётся в памяти, продолжая
+логировать неудачные переподключения. Процесс жив, туннель мёртв, GitHub
+получает 530 — это случилось на прогоне, и в истории доставок видно
+`issues.unlabeled → 530` рядом с успешными.
+
+**Адрес в этом документе мог устареть.** Текущий — в
+`scratchpad/tunnel-url.txt` и в настройках вебхука репозитория.
 
 Поднять заново: `docker compose up -d` в этом каталоге. Порядок и грабли —
 [`LOCAL.md`](LOCAL.md).
