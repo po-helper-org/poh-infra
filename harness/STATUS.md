@@ -31,6 +31,20 @@ cloudflared переживает разрыв связи с edge и остаёт
 Поднять заново: `docker compose up -d` в этом каталоге. Порядок и грабли —
 [`LOCAL.md`](LOCAL.md).
 
+**Если стенд не отвечает — сначала проверь сам Docker.** `restart: unless-stopped`
+поднимает упавший контейнер, но не помогает, когда останавливается демон целиком:
+за ночь Docker Desktop выключился один раз, и вместе с ним исчез весь стенд.
+Признак — `curl localhost:8080/health` возвращает `000`, а туннель `502`.
+
+```bash
+open -a Docker && until docker info >/dev/null 2>&1; do sleep 5; done
+docker compose up -d
+curl -fsS http://localhost:8080/health
+```
+
+Данные переживают перезапуск: история Temporal лежит в томе `pgdata`, и
+припаркованные задачи продолжают с того места, где стояли.
+
 ## Что прогнано вживую
 
 Задача [#1](https://github.com/po-helper-org/poh-demo-checkout/issues/1) прошла
