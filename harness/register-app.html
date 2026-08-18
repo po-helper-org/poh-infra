@@ -1,0 +1,91 @@
+<!doctype html>
+<html lang="ru">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Создать GitHub App для харнесса</title>
+<style>
+ body{font:16px/1.6 system-ui,sans-serif;max-width:760px;margin:40px auto;padding:0 16px;color:#111}
+ label{display:block;margin:16px 0 4px;font-weight:600}
+ input,select{width:100%;padding:9px 11px;font:15px monospace;border:1px solid #ccc;border-radius:8px;box-sizing:border-box}
+ button{margin-top:24px;font:600 16px system-ui;padding:12px 22px;border:0;border-radius:8px;background:#1f6feb;color:#fff;cursor:pointer}
+ code{background:#f0f0f0;padding:2px 6px;border-radius:4px}
+ pre{background:#f6f8fa;padding:12px;border-radius:8px;overflow:auto}
+ small{color:#555} li{margin:6px 0}
+ .warn{background:#fff8e1;border-left:4px solid #f0b429;padding:10px 14px;margin:18px 0}
+</style></head>
+<body>
+<h1>GitHub App для харнесса</h1>
+
+<p>Приложения GitHub создаются только через браузер — API для этого нет. Форма
+собирает манифест с нужными правами и событиями, GitHub генерирует App ID,
+приватный ключ и секрет вебхука сам.</p>
+
+<div class="warn">
+Приложение, созданное в одной организации, ставится <b>только в неё</b>. Если
+контур обслуживает репозитории двух организаций — приложений нужно два.
+Именно на это натыкаются, пытаясь переиспользовать чужой App.
+</div>
+
+<label>Организация или пользователь <small>(владелец приложения)</small></label>
+<input id="owner" placeholder="po-helper-org">
+
+<label>Имя приложения <small>(уникально на весь GitHub)</small></label>
+<input id="name" placeholder="harness-demo">
+
+<label>Адрес харнесса <small>(домен из Dokploy, без слэша на конце)</small></label>
+<input id="base" placeholder="https://harness.example.com">
+
+<form id="f" method="post" target="_blank">
+  <input type="hidden" name="manifest" id="manifest">
+  <button type="submit" onclick="return build()">Создать GitHub App →</button>
+</form>
+
+<h2>Дальше</h2>
+<ol>
+  <li>На странице GitHub нажать <b>Create GitHub App</b>.</li>
+  <li>GitHub перебросит на <code>&lt;адрес&gt;/issue/webhook?code=…</code>.
+      Страница покажет ошибку — так и должно быть: вебхук браузеру не отвечает.</li>
+  <li>Скопировать <code>code</code> из адресной строки и выполнить:
+      <pre>bash finish-registration.sh &lt;code&gt;</pre>
+      Скрипт обменяет код на учётные данные и запишет <code>harness-app.env</code>
+      — три строки для Environment в Dokploy. Приватный ключ никуда не уходит,
+      только в этот локальный файл.</li>
+  <li>На странице приложения — <b>Install App</b> и выбрать организацию.</li>
+</ol>
+
+<p><small>Код одноразовый и живёт около часа. Просрочили — создавайте приложение
+заново, это дешевле, чем чинить.</small></p>
+
+<script>
+function build(){
+  const owner = document.getElementById('owner').value.trim();
+  const name  = document.getElementById('name').value.trim();
+  const base  = document.getElementById('base').value.trim().replace(/\/+$/,'');
+  if(!owner || !name || !base){ alert('Заполни все три поля'); return false; }
+
+  // Организация и личный аккаунт создают приложения по разным адресам.
+  document.getElementById('f').action =
+    'https://github.com/organizations/' + encodeURIComponent(owner) +
+    '/settings/apps/new?state=harness';
+
+  const manifest = {
+    name: name,
+    url: base,
+    // Вебхук и redirect — один адрес: после создания GitHub вернёт `code` туда
+    // же, и его видно в адресной строке.
+    hook_attributes: { url: base + '/issue/webhook', active: true },
+    redirect_url: base + '/issue/webhook',
+    public: false,
+    default_permissions: {
+      issues: 'write',         // метки, комментарии, SubIssue
+      pull_requests: 'write',  // PR от агента разработки
+      contents: 'write',       // ветки аналитики и работы
+      actions: 'write',        // диспатч прогона в режиме dispatch
+      metadata: 'read'
+    },
+    default_events: ['issues','issue_comment','label','pull_request','push','sub_issues']
+  };
+  document.getElementById('manifest').value = JSON.stringify(manifest);
+  return true;
+}
+</script>
+</body></html>
