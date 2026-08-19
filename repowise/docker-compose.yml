@@ -48,6 +48,15 @@ x-repowise-env: &repowise-env
   OPENROUTER_API_KEY: "${OPENROUTER_API_KEY:-}"
   PYTHONUNBUFFERED: "1"
 
+# ЛИМИТЫ ПАМЯТИ ОБЯЗАТЕЛЬНЫ, а не гигиена. Сервис выкладывается на хост, где
+# swap ВЫКЛЮЧЕН, свободной памяти около 200 МБ и живут ЧУЖИЕ боевые сервисы.
+# Без лимита всплеск индексации выбирает память хоста, и OOM-killer выбирает
+# жертву сам — ей может оказаться сосед. С лимитом умирает наш контейнер, и
+# это чинится рестартом и видно в логах.
+#
+# Значения — с запасом к измеренному на отладке. Поднимать по факту нехватки,
+# а не «на всякий случай»: запас, взятый впрок, здесь отнимается у соседа.
+
 services:
   # ───────────────────────── MCP-эндпоинты ─────────────────────────
   #
@@ -58,6 +67,7 @@ services:
   # Порты НЕ публикуются: `expose` открывает их только внутренней сети.
 
   repowise-contour-mcp:
+    mem_limit: 512m
     build: .
     image: poh-repowise:local
     restart: unless-stopped
@@ -77,6 +87,7 @@ services:
     expose: ["7338"]
 
   repowise-product-mcp:
+    mem_limit: 384m
     build: .
     image: poh-repowise:local
     restart: unless-stopped
@@ -104,6 +115,7 @@ services:
   # `/health` у него открыт и ключа не требует — годится для healthcheck.
 
   repowise-web:
+    mem_limit: 512m
     build: .
     image: poh-repowise:local
     restart: unless-stopped
@@ -141,6 +153,7 @@ services:
   # репозиториев организации хуже упавшего.
 
   repowise-proxy:
+    mem_limit: 128m
     build:
       context: .
       dockerfile: Dockerfile.proxy
@@ -175,6 +188,7 @@ services:
   #   docker compose run --rm indexer python /app/indexer.py bootstrap
 
   indexer:
+    mem_limit: 768m
     build: .
     image: poh-repowise:local
     restart: unless-stopped
@@ -195,6 +209,7 @@ services:
   # эндпоинт слушать на несуществующем адресе.
 
   caddy:
+    mem_limit: 64m
     image: caddy:2-alpine
     restart: unless-stopped
     ports:
@@ -247,7 +262,15 @@ networks:
 volumes:
   # Клоны репозиториев и `.repowise/` каждого из них. Единственный писатель —
   # индексатор; остальные монтируют том на чтение.
+  #
+  # `external: true` — потому что на сервер индекс ПРИВОЗЯТ готовым, а не
+  # строят на месте: первичная индексация там не помещается (модификация M4
+  # вердикта FNR-5). Том заводят и наполняют до первого `up`, порядок — в
+  # docs/repowise/deploy.md. Без этого флага compose ругается на «том уже есть,
+  # но создан не мной» при каждом запуске.
   workspaces:
+    external: true
+    name: "${REPOWISE_WORKSPACES_VOLUME:-poh-repowise_workspaces}"
   # Журналы диалогов. Из них рендерится repowise-dialog.md.
   sessions:
   # Кэш тарбола веб-интерфейса (~50 МБ). Без тома он качается заново на каждый
