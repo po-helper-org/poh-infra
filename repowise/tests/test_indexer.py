@@ -266,3 +266,50 @@ def test_sync_runs_from_the_root_and_keeps_default(idx, tmp_path, monkeypatch):
     assert update and update[0][1].endswith("/workspaces/product")
     default = [a for a, _ in made if a[:3] == ["repowise", "workspace", "set-default"]]
     assert default and default[0][-1] == "главный"
+
+
+# --- Эмбеддер доезжает до конфигурации ---
+#
+# Регрессия с живого прогона: `reindex --embedder gemini` строит векторы, но
+# решение «искать по смыслу или по тексту» MCP-эндпоинт принимает по
+# КОНФИГУРАЦИИ репозитория. Без `--embedder` у `init` там остаётся `mock`, и
+# эндпоинт отвечает `semantic_search: false` и пустым результатом — при
+# построенных векторах и оплаченных вызовах эмбеддинга.
+
+def test_init_carries_the_embedder(idx, tmp_path, monkeypatch):
+    _two_repo_workspace(idx, tmp_path)
+    made = []
+    monkeypatch.setattr(idx, "head_sha", lambda p: "sha")
+    monkeypatch.setattr(idx, "run", lambda args, cwd=None, check=True: made.append(args))
+    idx.PROVIDER = ""
+    idx.EMBEDDER = "gemini"
+    idx.bootstrap("product")
+
+    init = [a for a in made if a[:2] == ["repowise", "init"]][0]
+    assert "--embedder" in init and "gemini" in init
+
+
+def test_bootstrap_builds_vectors_when_embedder_set(idx, tmp_path, monkeypatch):
+    _two_repo_workspace(idx, tmp_path)
+    made = []
+    monkeypatch.setattr(idx, "head_sha", lambda p: "sha")
+    monkeypatch.setattr(idx, "run", lambda args, cwd=None, check=True: made.append(args))
+    idx.PROVIDER = ""
+    idx.EMBEDDER = "gemini"
+    idx.bootstrap("product")
+
+    assert any(a[:2] == ["repowise", "reindex"] for a in made)
+
+
+def test_no_vectors_without_embedder(idx, tmp_path, monkeypatch):
+    # Без эмбеддера векторы не строятся вовсе: платить за вызовы, которых
+    # никто не просил, незачем.
+    _two_repo_workspace(idx, tmp_path)
+    made = []
+    monkeypatch.setattr(idx, "head_sha", lambda p: "sha")
+    monkeypatch.setattr(idx, "run", lambda args, cwd=None, check=True: made.append(args))
+    idx.PROVIDER = idx.EMBEDDER = ""
+    idx.bootstrap("product")
+
+    assert not any(a[:2] == ["repowise", "reindex"] for a in made)
+    assert not any("--embedder" in a for a in made)

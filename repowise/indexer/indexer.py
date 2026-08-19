@@ -154,14 +154,18 @@ def scrub_secrets(repo_dir: Path) -> int:
     return removed
 
 
+def embedder_args() -> list[str]:
+    """Только эмбеддер. Нужен `init` и `reindex`, которые модель не зовут."""
+    return ["--embedder", EMBEDDER] if EMBEDDER else []
+
+
 def index_args() -> list[str]:
     args = []
     if PROVIDER:
         args += ["--provider", PROVIDER]
     if MODEL:
         args += ["--model", MODEL]
-    if EMBEDDER:
-        args += ["--embedder", EMBEDDER]
+    args += embedder_args()
     return args
 
 
@@ -195,7 +199,13 @@ def bootstrap(workspace: str) -> None:
     # ОДНОГО репозитория это не всплывает — `workspace add` там не вызывается,
     # и ошибка ждёт первого же второго репозитория.
     log(f"{workspace}: структурный индекс на корне, репозиториев {len(cloned)} (без модели)")
-    run(["repowise", "init", "--no-prose", "-y", *excludes, str(root)], cwd=root)
+    # --embedder передаётся ИМЕННО ЗДЕСЬ, а не только в reindex: значение
+    # попадает в конфигурацию репозитория, и по ней MCP-эндпоинт решает,
+    # искать по смыслу или по тексту. Без него в конфигурации остаётся `mock`,
+    # и семантический поиск не работает даже при построенных векторах —
+    # эндпоинт отвечает `semantic_search: false` и пустым результатом.
+    run(["repowise", "init", "--no-prose", "-y", *excludes, *embedder_args(),
+         str(root)], cwd=root)
 
     set_default_repo(root, primary.name)
     for repo in cloned:
@@ -208,7 +218,10 @@ def bootstrap(workspace: str) -> None:
     else:
         log(f"{workspace}: REPOWISE_PROVIDER не задан — вики остаётся структурной")
 
-    if not EMBEDDER:
+    if EMBEDDER:
+        log(f"{workspace}: строю векторный индекс эмбеддером {EMBEDDER}")
+        run(["repowise", "reindex", "--embedder", EMBEDDER], cwd=root, check=False)
+    else:
         log("REPOWISE_EMBEDDER не задан: семантический поиск недоступен, "
             "полнотекстовый работает (см. docs/repowise/runbook.md)")
 

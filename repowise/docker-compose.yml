@@ -37,6 +37,15 @@ x-repowise-env: &repowise-env
   REPOWISE_EMBEDDER: "${REPOWISE_EMBEDDER:-}"
   OPENAI_API_KEY: "${REPOWISE_LLM_API_KEY:-}"
   OPENAI_BASE_URL: "${REPOWISE_LLM_BASE_URL:-}"
+  # Ключ эмбеддера. Имя переменной задаёт САМ пакет и зависит от провайдера,
+  # поэтому пробрасываются все три — пустые ничего не включают. Своим именем
+  # (вроде REPOWISE_EMBEDDER_KEY) обойтись нельзя: repowise читает эти.
+  #
+  # Эмбеддер и модель — РАЗНЫЕ вещи и разные ключи: модель пишет прозу страниц,
+  # эмбеддер строит векторный индекс для поиска по смыслу. Один может быть
+  # задан без другого.
+  GEMINI_API_KEY: "${GEMINI_API_KEY:-}"
+  OPENROUTER_API_KEY: "${OPENROUTER_API_KEY:-}"
   PYTHONUNBUFFERED: "1"
 
 services:
