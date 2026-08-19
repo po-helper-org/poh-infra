@@ -162,8 +162,11 @@ services:
       TEMPORAL_UI_PUBLIC_PATH: "/temporal"
     # Прямой порт помимо префикса: когда до UI надо дойти в обход прокси
     # (проверить, что пусто именно из-за маршрутизации, а не из-за самого UI).
+    # Слушает ТОЛЬКО loopback: наружный вход закрыт basic-auth'ом на caddy, и
+    # тот же UI, торчащий вторым портом в мир, снимал бы эту защиту целиком.
+    # С хоста — `curl localhost:8233`, снаружи — через ssh-туннель.
     ports:
-      - "${TEMPORAL_UI_PORT:-8233}:8080"
+      - "127.0.0.1:${TEMPORAL_UI_PORT:-8233}:8080"
     expose: ["8080"]
     depends_on: [temporal]
 
@@ -292,9 +295,44 @@ services:
       - "${HARNESS_PORT:-8080}:80"
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
+    # Учётка на Temporal UI (см. Caddyfile). Хэш, не пароль: конфиг входа
+    # читается в логах и в `docker inspect`, и открытый пароль там означал бы
+    # секрет, разъехавшийся по местам, где его никто не ищет.
+    environment:
+      TEMPORAL_UI_USER: "${TEMPORAL_UI_USER:?задай TEMPORAL_UI_USER}"
+      TEMPORAL_UI_PASSWORD_HASH: "${TEMPORAL_UI_PASSWORD_HASH:?задай TEMPORAL_UI_PASSWORD_HASH (caddy hash-password --plaintext '<пароль>')}"
+    # Маршруты Traefik описаны ЗДЕСЬ, а не только в панели Dokploy: панель
+    # заводит роутер лишь на entrypoint `web`, и по https любой хост падал в
+    # дефолтный самоподписанный сертификат с 404. Сертификат берётся резолвером
+    # `letsencrypt` — он задан глобально на entrypoint `websecure` самого
+    # Dokploy-Traefik, поэтому здесь достаточно назвать entrypoint.
+    #
+    # Роутер на `web` остаётся без редиректа на https: GitHub за редиректами
+    # вебхука не идёт, и 308 на /issue/webhook выглядел бы как принятая, но
+    # никуда не дошедшая доставка.
+    labels:
+      - traefik.enable=true
+      - traefik.docker.network=dokploy-network
+      - traefik.http.services.poh-harness.loadbalancer.server.port=80
+      - traefik.http.routers.poh-harness-web.rule=Host(`${HARNESS_HOST:-harness.localhost}`)
+      - traefik.http.routers.poh-harness-web.entrypoints=web
+      - traefik.http.routers.poh-harness-web.service=poh-harness
+      - traefik.http.routers.poh-harness-websecure.rule=Host(`${HARNESS_HOST:-harness.localhost}`)
+      - traefik.http.routers.poh-harness-websecure.entrypoints=websecure
+      - traefik.http.routers.poh-harness-websecure.service=poh-harness
+      - traefik.http.routers.poh-harness-websecure.tls=true
+      - traefik.http.routers.poh-harness-websecure.tls.certresolver=letsencrypt
     # pr-ingress намеренно НЕ в depends_on: половина ревью включается профилем,
     # и жёсткая зависимость не дала бы поднять вход без неё.
     depends_on: [issue-webhook, temporal-ui]
+    networks: [default, dokploy-network]
+
+# Сеть Traefik заводится Dokploy'ем и общая на весь сервер — здесь она внешняя.
+# Локальному запуску без Dokploy сеть не нужна: `docker network create
+# dokploy-network` один раз, либо убрать `networks` у caddy.
+networks:
+  dokploy-network:
+    external: true
 
 volumes:
   pgdata:
