@@ -75,6 +75,65 @@ docker compose logs repowise-contour-mcp | grep 'Uvicorn running'
 docker compose exec repowise-contour-mcp repowise --version   # ждём 0.44.0+
 ```
 
+## Эндпоинт отвечает, но на каждый вопрос говорит «индекса нет»
+
+Самый дорогой из отказов сервиса: всё выглядит исправным — контейнер жив, MCP
+отвечает, прокси журналирует ходы, артефакт диалога создаётся. Только в каждом
+ответе:
+
+```json
+{"error": "This repository has no repowise index yet."}
+```
+
+Значит эндпоинт запущен **не на том каталоге**. Проверить аргументы процесса:
+
+```bash
+docker compose exec repowise-product-mcp sh -c 'cat /proc/1/cmdline | tr "\0" " "'
+```
+
+Путь обязан оканчиваться именем первичного репозитория, а не корнем workspace:
+
+```
+… --port 7338 /workspaces/product/poh-demo-checkout    ← верно
+… --port 7338 /workspaces/product/                     ← маркер не прочитан
+… --port 7338                                          ← аргумент потерян
+```
+
+Две причины, обе наблюдались:
+
+1. **Маркер `.primary` пуст или отсутствует.** Его пишет индексатор в корень
+   workspace при `bootstrap` и на каждом цикле `sync`. Нет маркера — не было
+   успешной индексации: `docker compose run --rm indexer python /app/indexer.py bootstrap`.
+
+2. **Аргумент пути потерян в YAML.** Складка `>` в `docker-compose.yml`
+   СОХРАНЯЕТ перенос строки перед строкой с бо́льшим отступом, и `sh -c`
+   получает две команды вместо одной: `repowise mcp` без пути (то есть на
+   текущем каталоге) и отдельной строкой сам путь. Поэтому `command`
+   MCP-сервисов записан списком в одну строку — не переносить.
+
+Проверка, что индекс на месте:
+
+```bash
+docker compose exec repowise-product-mcp \
+  sh -c 'cd /workspaces/product/$(cat /workspaces/product/.primary) && repowise status'
+```
+
+`Total pages` больше нуля — индекс есть, значит дело в пути.
+
+## Прокси возвращает 421 Invalid Host header
+
+У MCP-сервера включена защита от DNS-rebinding: Host он сверяет со списком
+разрешённых. Проксированный запрос приходит с `repowise-product-mcp:7338` и
+отвергается.
+
+Прокси подменяет Host на `localhost:<порт эндпоинта>` — **обязательно с
+портом**: голый `localhost` и `127.0.0.1` отвергаются так же, как имя
+контейнера. Порт берётся из адреса эндпоинта, поэтому смена порта в compose
+подхватывается сама.
+
+Отказ виден в артефакте диалога: ход есть, а в ответе `Invalid Host header`.
+Если он вернулся — смотреть `_loopback_host` в `repowise/proxy/proxy.py`.
+
 ## Админка не пускает при верном пароле
 
 Почти всегда — **доллары в bcrypt-хэше не удвоены**. `docker compose`

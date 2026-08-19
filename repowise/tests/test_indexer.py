@@ -198,3 +198,50 @@ def test_git_env_uses_askpass_helper(idx, monkeypatch):
     monkeypatch.setattr(idx, "GIT_TOKEN", "секрет")
     env = idx.git_env()
     assert env["GIT_ASKPASS"] == "/usr/local/bin/git-askpass"
+
+
+# --- Маркер первичного репозитория ---
+#
+# Регрессия, найденная сквозной проверкой. MCP-эндпоинту нужен путь именно к
+# первичному репозиторию: конфигурация workspace лежит в его `.repowise`.
+# Раньше compose вычислял его как `ls | head -1` — алфавитный порядок, который
+# с порядком в списке состава не совпадает.
+
+def test_bootstrap_writes_primary_marker(idx, tmp_path, monkeypatch):
+    config = tmp_path / "config"
+    config.mkdir()
+    (config / "product.yml").write_text(
+        "repos:\n  - repo: o/я-первый\n    alias: я-первый\n"
+        "  - repo: o/a-второй\n    alias: a-второй\n", encoding="utf-8")
+    for alias in ("я-первый", "a-второй"):
+        (tmp_path / "workspaces" / "product" / alias / ".git").mkdir(parents=True)
+
+    monkeypatch.setattr(idx, "head_sha", lambda p: "sha")
+    monkeypatch.setattr(idx, "run", lambda args, cwd=None, check=True: None)
+    idx.PROVIDER = ""
+    idx.bootstrap("product")
+
+    marker = (tmp_path / "workspaces" / "product" / ".primary").read_text(encoding="utf-8")
+    # Первый в СПИСКЕ СОСТАВА, а не первый по алфавиту: запрос без alias падает
+    # на него (правило R4), и выбран он осознанно.
+    assert marker == "я-первый"
+
+
+def test_sync_keeps_primary_from_the_config_order(idx, tmp_path, monkeypatch):
+    config = tmp_path / "config"
+    config.mkdir()
+    (config / "product.yml").write_text(
+        "repos:\n  - repo: o/главный\n    alias: главный\n"
+        "  - repo: o/a-сосед\n    alias: a-сосед\n", encoding="utf-8")
+    for alias in ("главный", "a-сосед"):
+        (tmp_path / "workspaces" / "product" / alias / ".git").mkdir(parents=True)
+
+    monkeypatch.setattr(idx, "head_sha", lambda p: "sha")
+    monkeypatch.setattr(idx, "run", lambda args, cwd=None, check=True: None)
+    monkeypatch.setattr(idx.subprocess, "run",
+                        lambda *a, **k: type("R", (), {"returncode": 0, "stdout": "",
+                                                       "stderr": ""})())
+    idx.sync("product")
+
+    marker = (tmp_path / "workspaces" / "product" / ".primary").read_text(encoding="utf-8")
+    assert marker == "главный"

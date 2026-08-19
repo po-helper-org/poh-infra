@@ -31,6 +31,7 @@ from __future__ import annotations
 import json
 import os
 import time
+import urllib.parse
 from pathlib import Path
 
 import httpx
@@ -102,6 +103,26 @@ def _read_journal(session: str) -> list[dict]:
 
 
 # --- Разбор конверта JSON-RPC ---
+
+def _loopback_host(upstream_url: str) -> str:
+    """Значение Host, которое MCP-эндпоинт согласен принять.
+
+    У сервера включена защита от DNS-rebinding: он сверяет Host со списком
+    разрешённых. Проксированный запрос приходит с `repowise-product-mcp:7338` и
+    отвергается кодом `421 Invalid Host header` — эндпоинт при этом выглядит
+    полностью исправным и отвечает на каждый запрос, просто не по делу.
+
+    Проверено на живом сервере: принимается **только `localhost` С ПОРТОМ**.
+    Голый `localhost` и `127.0.0.1` отвергаются так же, как имя контейнера, —
+    поэтому порт берётся из адреса эндпоинта, а не зашивается.
+
+    Подмена ничего не ослабляет: соединение устанавливается по адресу из URL, а
+    сама защита рассчитана на браузер, которого здесь нет. Доступ у нас
+    разграничивают сеть compose и токен прокси.
+    """
+    port = urllib.parse.urlsplit(upstream_url).port
+    return f"localhost:{port}" if port else "localhost"
+
 
 def _describe_request(body: bytes) -> dict:
     """Имя метода и инструмента из запроса. Аргументы — как есть, без разбора."""
@@ -227,6 +248,7 @@ async def mcp(request: Request, workspace: str = "", session: str = "",
     headers = {k: v for k, v in request.headers.items()
                if k.lower() in {"content-type", "accept", "mcp-session-id",
                                 "mcp-protocol-version"}}
+    headers["host"] = _loopback_host(WORKSPACES[workspace])
     try:
         async with httpx.AsyncClient(timeout=UPSTREAM_TIMEOUT_SEC) as client:
             upstream = await client.post(WORKSPACES[workspace], content=body, headers=headers)

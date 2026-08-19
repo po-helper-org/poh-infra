@@ -288,3 +288,48 @@ def test_token_never_lands_in_transcript(app, client, monkeypatch):
                 content=json.dumps({"method": "tools/call",
                                     "params": {"name": "get_overview", "arguments": {}}}))
     assert TOKEN not in app._render_markdown("s8")
+
+
+# --- Host для MCP-эндпоинта ---
+#
+# Регрессия, найденная сквозной проверкой. У MCP-сервера включена защита от
+# DNS-rebinding: проксированный запрос с Host вида `repowise-product-mcp:7338`
+# он отвергает кодом 421 «Invalid Host header». Эндпоинт при этом выглядит
+# полностью исправным и отвечает на каждый запрос — просто не по делу, и в
+# артефакте диалога это читается как ответ индекса «не могу».
+
+def test_loopback_host_keeps_the_port(app):
+    # Проверено на живом сервере: голый `localhost` он отвергает так же, как
+    # имя контейнера. Принимается ТОЛЬКО с портом.
+    assert app._loopback_host("http://repowise-product-mcp:7338/mcp") == "localhost:7338"
+
+
+def test_loopback_host_without_port(app):
+    assert app._loopback_host("http://repowise-product-mcp/mcp") == "localhost"
+
+
+def test_upstream_gets_loopback_host(app, client, monkeypatch):
+    seen = {}
+
+    class FakeResponse:
+        status_code = 200
+        content = b'data: {"result":{"content":[{"type":"text","text":"ok"}]}}\n'
+        headers = {"content-type": "text/event-stream"}
+
+    class FakeClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a):
+            return False
+
+        async def post(self, url, content=None, headers=None):
+            seen["headers"] = headers
+            return FakeResponse()
+
+    monkeypatch.setattr(app.httpx, "AsyncClient", lambda **k: FakeClient())
+    client.post("/mcp", params={"workspace": "product", "session": "s9"},
+                headers=_auth(),
+                content=json.dumps({"method": "tools/call",
+                                    "params": {"name": "get_overview"}}))
+    assert seen["headers"]["host"] == "localhost:7338"

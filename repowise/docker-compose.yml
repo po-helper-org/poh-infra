@@ -56,9 +56,15 @@ services:
     volumes:
       - workspaces:/workspaces
     working_dir: /workspaces/contour
-    command: >
-      sh -c "repowise mcp --transport streamable-http --host 0.0.0.0 --port 7338
-             /workspaces/contour/$$(ls /workspaces/contour | head -1)"
+    # ОДНОЙ СТРОКОЙ. Складка `>` сохраняет перенос перед строкой с бо́льшим
+    # отступом, и `sh -c` получал ДВЕ команды: `repowise mcp` без пути (то
+    # есть на корне workspace, где индекса нет) и отдельной строкой сам путь.
+    # Эндпоинт при этом поднимался и отвечал — «индекса нет» на каждый вопрос.
+    #
+    # Первичный репозиторий берётся из маркера, который пишет индексатор:
+    # `ls | head -1` дал бы алфавитный порядок, а первый в списке состава
+    # выбран осознанно — запрос без alias падает на него (правило R4).
+    command: ["sh", "-c", "exec repowise mcp --transport streamable-http --host 0.0.0.0 --port 7338 /workspaces/contour/$$(cat /workspaces/contour/.primary)"]
     expose: ["7338"]
 
   repowise-product-mcp:
@@ -69,9 +75,15 @@ services:
     volumes:
       - workspaces:/workspaces
     working_dir: /workspaces/product
-    command: >
-      sh -c "repowise mcp --transport streamable-http --host 0.0.0.0 --port 7338
-             /workspaces/product/$$(ls /workspaces/product | head -1)"
+    # ОДНОЙ СТРОКОЙ. Складка `>` сохраняет перенос перед строкой с бо́льшим
+    # отступом, и `sh -c` получал ДВЕ команды: `repowise mcp` без пути (то
+    # есть на корне workspace, где индекса нет) и отдельной строкой сам путь.
+    # Эндпоинт при этом поднимался и отвечал — «индекса нет» на каждый вопрос.
+    #
+    # Первичный репозиторий берётся из маркера, который пишет индексатор:
+    # `ls | head -1` дал бы алфавитный порядок, а первый в списке состава
+    # выбран осознанно — запрос без alias падает на него (правило R4).
+    command: ["sh", "-c", "exec repowise mcp --transport streamable-http --host 0.0.0.0 --port 7338 /workspaces/product/$$(cat /workspaces/product/.primary)"]
     expose: ["7338"]
 
   # ────────────────────────── Веб-админка ──────────────────────────

@@ -117,6 +117,20 @@ def head_sha(repo_dir: Path) -> str:
     return (result.stdout or "").strip()
 
 
+def write_primary_marker(workspace: str, primary: Path) -> None:
+    """Записать alias первичного репозитория в корень workspace.
+
+    MCP-эндпоинту нужен путь именно к первичному репозиторию: конфигурация
+    workspace лежит в его `.repowise`, и оттуда сервер узнаёт про остальные.
+    Вычислять его в compose через `ls | head -1` нельзя — сортировка каталога
+    не совпадает с порядком в списке состава, а первый в списке выбран
+    осознанно (запрос без alias падает на него, правило R4).
+    """
+    root = WORKSPACES_ROOT / workspace
+    root.mkdir(parents=True, exist_ok=True)
+    (root / ".primary").write_text(primary.name, encoding="utf-8")
+
+
 def write_sync_state(repo_dir: Path) -> None:
     state_dir = repo_dir / ".repowise"
     state_dir.mkdir(parents=True, exist_ok=True)
@@ -170,6 +184,7 @@ def bootstrap(workspace: str) -> None:
         raise RuntimeError(f"{workspace}: не склонирован ни один репозиторий")
 
     primary, rest = cloned[0], cloned[1:]
+    write_primary_marker(workspace, primary)
     excludes = [a for pattern in EXCLUDES for a in ("-x", pattern)]
 
     log(f"{workspace}: структурный индекс {primary.name} (без модели)")
@@ -207,7 +222,12 @@ def sync(workspace: str) -> None:
     repos = [p for p in sorted(root.glob("*")) if (p / ".git").exists()]
     if not repos:
         return
+    # Порядок из списка состава, а не из каталога: первичным должен остаться
+    # тот же репозиторий, что и при первичной индексации (правило R4).
+    order = [e.get("alias") or e["repo"].split("/")[-1] for e in entries]
+    repos.sort(key=lambda p: order.index(p.name) if p.name in order else len(order))
     primary = repos[0]
+    write_primary_marker(workspace, primary)
 
     for repo in repos:
         before = head_sha(repo)
