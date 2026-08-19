@@ -91,6 +91,11 @@ x-issue-env: &issue-env
   DRY_RUN: "${DRY_RUN-1}"
   SENTRY_DSN: "${SENTRY_DSN:-}"
   SENTRY_ENVIRONMENT: "${SENTRY_ENVIRONMENT:-harness}"
+  # Слаг организации Sentry — из него собирается ССЫЛКА на событие в комментарии
+  # к Issue. В DSN его нет (там только числовой id), поэтому без этой переменной
+  # человек получает голый id события и ищет его в интерфейсе руками — проверено
+  # живым сбоем #41: комментарий пришёл, ссылки в нём не было.
+  SENTRY_ORG: "${SENTRY_ORG:-}"
   PYTHONUNBUFFERED: "1"
 
 # Обязательность PR-переменных проверяется НЕ подстановкой, а на старте самого
@@ -115,6 +120,11 @@ x-pr-env: &pr-env
   AGENT_EVENT_SECRET: "${AGENT_EVENT_SECRET:?задай AGENT_EVENT_SECRET}"
   SENTRY_DSN: "${SENTRY_DSN:-}"
   SENTRY_ENVIRONMENT: "${SENTRY_ENVIRONMENT:-harness}"
+  # Слаг организации Sentry — из него собирается ССЫЛКА на событие в комментарии
+  # к Issue. В DSN его нет (там только числовой id), поэтому без этой переменной
+  # человек получает голый id события и ищет его в интерфейсе руками — проверено
+  # живым сбоем #41: комментарий пришёл, ссылки в нём не было.
+  SENTRY_ORG: "${SENTRY_ORG:-}"
 
 services:
   # ─────────────────────────── Temporal ───────────────────────────
