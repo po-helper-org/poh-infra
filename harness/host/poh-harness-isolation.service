@@ -1,0 +1,15 @@
+[Unit]
+Description=Сетевой барьер контура Harness (запрет доступа к соседним стекам)
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+# Имя сети контура и список соседних сетей — снаружи: слаг compose-проекта свой
+# у каждой установки. Без файла скрипт не найдёт сеть и честно откажется.
+EnvironmentFile=-/etc/default/poh-harness-isolation
+ExecStart=/usr/local/sbin/poh-harness-isolation.sh
+
+[Install]
+WantedBy=multi-user.target

@@ -56,6 +56,6 @@
 		basic_auth {
 			{$TEMPORAL_UI_USER} {$TEMPORAL_UI_PASSWORD_HASH}
 		}
-		reverse_proxy temporal-ui:8080
+		reverse_proxy harness-temporal-ui:8080
 	}
 }
