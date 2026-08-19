@@ -64,10 +64,18 @@ Caddy внутри разводит один домен на три пути, и
 роутеров Traefik. Разъехавшись с `PUBLIC_URL`, даёт рабочий вход и пустую
 страницу UI — CORS режет её собственные запросы.
 
-**`TEMPORAL_UI_USER` / `TEMPORAL_UI_PASSWORD_HASH`** — учётка на UI. Хэш
-считает `docker run --rm caddy:2-alpine caddy hash-password --plaintext
-'<пароль>'`. Обе обязательны: без них caddy не стартует вовсе, и это лучше
-молча открытого UI.
+**Учётка Temporal UI задаётся НЕ здесь.** Панель переписывает `.env` на каждом
+деплое, поэтому `TEMPORAL_UI_USER` и `TEMPORAL_UI_PASSWORD_HASH` лежат на
+сервере отдельным файлом `/etc/poh-harness/temporal-ui-auth.env` (0600):
+
+```
+TEMPORAL_UI_USER=poh
+TEMPORAL_UI_PASSWORD_HASH=a$…   # caddy hash-password --plaintext '<пароль>'
+```
+
+Хэш считает `docker run --rm caddy:2-alpine caddy hash-password --plaintext
+'<пароль>'`. Без этих переменных caddy не стартует вовсе — это лучше молча
+открытого UI.
 
 **`AGENT_EVENT_SECRET`** — та же строка, что лежит секретом в каждом
 репозитории под контуром. Две стороны одного канала: меняются только парой.
