@@ -104,7 +104,7 @@ curl -s -o /dev/null -w '%{http_code}\n' -X POST "$PUBLIC_URL/pr/webhook"
 curl -s -o /dev/null -w '%{http_code}\n' -X POST "$PUBLIC_URL/issue/agent-event"
 
 # 4. Temporal видит воркер
-open "$PUBLIC_URL/temporal/"
+open "$PUBLIC_URL/"   # Temporal UI живёт на корне домена
 ```
 
 **`503` на шаге 3 — самая дорогая из возможных ошибок конфигурации.** Всё

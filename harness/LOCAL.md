@@ -85,7 +85,7 @@ docker exec harness-temporal-1 temporal workflow describe --address temporal:723
 docker compose logs -f issue-worker
 
 # UI
-open http://localhost:8080/temporal/
+open http://localhost:8080/   # Temporal UI живёт на корне домена
 ```
 
 `Pending Activities` в `describe` — самое полезное место: там видно, на какой

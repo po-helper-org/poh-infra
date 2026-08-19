@@ -11,7 +11,7 @@
 |---|---|
 | Приём вебхуков | `http://harness.stand.example/issue/webhook` |
 | Приём докладов агентов | `.../issue/agent-event` |
-| Temporal UI | `.../temporal/` (basic-auth), напрямую — `ssh -L` на `127.0.0.1:8233` |
+| Temporal UI | корень домена (basic-auth), напрямую — `ssh -L` на `127.0.0.1:8233` |
 | Демо-репозиторий | https://github.com/po-helper-org/poh-demo-checkout |
 
 **Только `http`.** По `https` на этом хосте сертификата нет, и вебхук
