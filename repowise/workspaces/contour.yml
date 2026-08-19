@@ -14,8 +14,8 @@ repos:
     alias: poh-infra
   - repo: po-helper-org/poh-pr-agents
     alias: poh-pr-agents
-  - repo: po-helper-org/poh-core
-    alias: poh-core
+  - repo: po-helper-org/poh-helper
+    alias: poh-helper
   - repo: po-helper-org/poh-cortex
     alias: poh-cortex
   - repo: po-helper-org/poh-memory-engine
@@ -26,9 +26,14 @@ repos:
     alias: poh-bft-writer
   - repo: po-helper-org/poh-scheduller
     alias: poh-scheduller
-  - repo: po-helper-org/poh-backlog-skills
-    alias: poh-backlog-skills
 
 # НЕ включены по правилу R6 (нет истории либо 10 файлов и меньше — контекста не
 # несут, а шум в list_repos дают):
 #   poh-pr-closer (1 файл), poh-po-task (3), poh-security-agent (2)
+#
+# НЕ включены, потому что репозитория не существует (проверено 19.08.2026):
+#   poh-backlog-skills — рабочая копия локальная, remote не заведён вовсе.
+#
+# Про poh-helper: локально каталог называется poh-core, но на GitHub это
+# po-helper-org/poh-helper. Alias берётся от имени НА GITHUB (правило R3) —
+# именно его агент увидит в ответе MCP как указание на источник.

@@ -136,7 +136,6 @@ def test_bootstrap_indexes_without_model_then_generates(idx, tmp_path, monkeypat
     kinds = [" ".join(a[:3]) for a in made]
     assert kinds[0].startswith("repowise init")
     assert "--no-prose" in made[0]
-    assert any(k.startswith("repowise workspace add") for k in kinds)
     # Проза — последней и отдельно.
     assert kinds[-1].startswith("repowise generate")
 
@@ -200,34 +199,15 @@ def test_git_env_uses_askpass_helper(idx, monkeypatch):
     assert env["GIT_ASKPASS"] == "/usr/local/bin/git-askpass"
 
 
-# --- Маркер первичного репозитория ---
+# --- Порядок первичной индексации workspace ---
 #
-# Регрессия, найденная сквозной проверкой. MCP-эндпоинту нужен путь именно к
-# первичному репозиторию: конфигурация workspace лежит в его `.repowise`.
-# Раньше compose вычислял его как `ls | head -1` — алфавитный порядок, который
-# с порядком в списке состава не совпадает.
+# Регрессия, найденная прогоном на девяти репозиториях. Прежний порядок (init
+# внутри первичного репозитория, затем `workspace add` на остальные) не
+# работает вовсе: `workspace add` требует уже созданного workspace и падает с
+# «No .repowise-workspace.yaml found». На workspace из ОДНОГО репозитория это
+# не всплывает — `workspace add` там не вызывается.
 
-def test_bootstrap_writes_primary_marker(idx, tmp_path, monkeypatch):
-    config = tmp_path / "config"
-    config.mkdir()
-    (config / "product.yml").write_text(
-        "repos:\n  - repo: o/я-первый\n    alias: я-первый\n"
-        "  - repo: o/a-второй\n    alias: a-второй\n", encoding="utf-8")
-    for alias in ("я-первый", "a-второй"):
-        (tmp_path / "workspaces" / "product" / alias / ".git").mkdir(parents=True)
-
-    monkeypatch.setattr(idx, "head_sha", lambda p: "sha")
-    monkeypatch.setattr(idx, "run", lambda args, cwd=None, check=True: None)
-    idx.PROVIDER = ""
-    idx.bootstrap("product")
-
-    marker = (tmp_path / "workspaces" / "product" / ".primary").read_text(encoding="utf-8")
-    # Первый в СПИСКЕ СОСТАВА, а не первый по алфавиту: запрос без alias падает
-    # на него (правило R4), и выбран он осознанно.
-    assert marker == "я-первый"
-
-
-def test_sync_keeps_primary_from_the_config_order(idx, tmp_path, monkeypatch):
+def _two_repo_workspace(idx, tmp_path):
     config = tmp_path / "config"
     config.mkdir()
     (config / "product.yml").write_text(
@@ -236,12 +216,53 @@ def test_sync_keeps_primary_from_the_config_order(idx, tmp_path, monkeypatch):
     for alias in ("главный", "a-сосед"):
         (tmp_path / "workspaces" / "product" / alias / ".git").mkdir(parents=True)
 
+
+def test_bootstrap_inits_at_workspace_root(idx, tmp_path, monkeypatch):
+    _two_repo_workspace(idx, tmp_path)
+    made = []
     monkeypatch.setattr(idx, "head_sha", lambda p: "sha")
-    monkeypatch.setattr(idx, "run", lambda args, cwd=None, check=True: None)
+    monkeypatch.setattr(idx, "run",
+                        lambda args, cwd=None, check=True: made.append((args, str(cwd))))
+    idx.PROVIDER = ""
+    idx.bootstrap("product")
+
+    init = [a for a, _ in made if a[:2] == ["repowise", "init"]]
+    assert len(init) == 1, "init должен быть ровно один — на корне"
+    # Последним аргументом init идёт КОРЕНЬ workspace, а не репозиторий.
+    assert init[0][-1].endswith("/workspaces/product")
+    # `workspace add` не вызывается вовсе: корень с несколькими репозиториями
+    # repowise распознаёт сам.
+    assert not any(a[:3] == ["repowise", "workspace", "add"] for a, _ in made)
+
+
+def test_bootstrap_sets_default_from_the_config_order(idx, tmp_path, monkeypatch):
+    # `repowise init` на корне назначает умолчанием ПЕРВЫЙ ПО АЛФАВИТУ (на
+    # живом прогоне это оказался poh-bft-writer). Правило R4 требует первого
+    # из списка состава — иначе вопрос без alias уедет в случайный репозиторий.
+    _two_repo_workspace(idx, tmp_path)
+    made = []
+    monkeypatch.setattr(idx, "head_sha", lambda p: "sha")
+    monkeypatch.setattr(idx, "run",
+                        lambda args, cwd=None, check=True: made.append((args, str(cwd))))
+    idx.PROVIDER = ""
+    idx.bootstrap("product")
+
+    default = [a for a, _ in made if a[:3] == ["repowise", "workspace", "set-default"]]
+    assert default and default[0][-1] == "главный"
+
+
+def test_sync_runs_from_the_root_and_keeps_default(idx, tmp_path, monkeypatch):
+    _two_repo_workspace(idx, tmp_path)
+    made = []
+    monkeypatch.setattr(idx, "head_sha", lambda p: "sha")
+    monkeypatch.setattr(idx, "run",
+                        lambda args, cwd=None, check=True: made.append((args, str(cwd))))
     monkeypatch.setattr(idx.subprocess, "run",
                         lambda *a, **k: type("R", (), {"returncode": 0, "stdout": "",
                                                        "stderr": ""})())
     idx.sync("product")
 
-    marker = (tmp_path / "workspaces" / "product" / ".primary").read_text(encoding="utf-8")
-    assert marker == "главный"
+    update = [(a, c) for a, c in made if a[:2] == ["repowise", "update"]]
+    assert update and update[0][1].endswith("/workspaces/product")
+    default = [a for a, _ in made if a[:3] == ["repowise", "workspace", "set-default"]]
+    assert default and default[0][-1] == "главный"

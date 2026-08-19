@@ -56,15 +56,15 @@ services:
     volumes:
       - workspaces:/workspaces
     working_dir: /workspaces/contour
-    # ОДНОЙ СТРОКОЙ. Складка `>` сохраняет перенос перед строкой с бо́льшим
-    # отступом, и `sh -c` получал ДВЕ команды: `repowise mcp` без пути (то
-    # есть на корне workspace, где индекса нет) и отдельной строкой сам путь.
-    # Эндпоинт при этом поднимался и отвечал — «индекса нет» на каждый вопрос.
+    # Путь — КОРЕНЬ workspace, не отдельный репозиторий: repowise поднимается
+    # в режиме workspace и отдаёт на два инструмента больше (get_architecture,
+    # get_blast_radius, list_repos поверх обычных).
     #
-    # Первичный репозиторий берётся из маркера, который пишет индексатор:
-    # `ls | head -1` дал бы алфавитный порядок, а первый в списке состава
-    # выбран осознанно — запрос без alias падает на него (правило R4).
-    command: ["sh", "-c", "exec repowise mcp --transport streamable-http --host 0.0.0.0 --port 7338 /workspaces/contour/$$(cat /workspaces/contour/.primary)"]
+    # Списком, а не строкой: складка YAML `>` сохраняет перенос перед строкой
+    # с бо́льшим отступом, и `sh -c` получал ДВЕ команды — `repowise mcp` без
+    # пути и отдельной строкой сам путь. Эндпоинт при этом поднимался и на
+    # каждый вопрос отвечал «индекса нет».
+    command: ["repowise", "mcp", "--transport", "streamable-http", "--host", "0.0.0.0", "--port", "7338", "/workspaces/contour"]
     expose: ["7338"]
 
   repowise-product-mcp:
@@ -75,15 +75,15 @@ services:
     volumes:
       - workspaces:/workspaces
     working_dir: /workspaces/product
-    # ОДНОЙ СТРОКОЙ. Складка `>` сохраняет перенос перед строкой с бо́льшим
-    # отступом, и `sh -c` получал ДВЕ команды: `repowise mcp` без пути (то
-    # есть на корне workspace, где индекса нет) и отдельной строкой сам путь.
-    # Эндпоинт при этом поднимался и отвечал — «индекса нет» на каждый вопрос.
+    # Путь — КОРЕНЬ workspace, не отдельный репозиторий: repowise поднимается
+    # в режиме workspace и отдаёт на два инструмента больше (get_architecture,
+    # get_blast_radius, list_repos поверх обычных).
     #
-    # Первичный репозиторий берётся из маркера, который пишет индексатор:
-    # `ls | head -1` дал бы алфавитный порядок, а первый в списке состава
-    # выбран осознанно — запрос без alias падает на него (правило R4).
-    command: ["sh", "-c", "exec repowise mcp --transport streamable-http --host 0.0.0.0 --port 7338 /workspaces/product/$$(cat /workspaces/product/.primary)"]
+    # Списком, а не строкой: складка YAML `>` сохраняет перенос перед строкой
+    # с бо́льшим отступом, и `sh -c` получал ДВЕ команды — `repowise mcp` без
+    # пути и отдельной строкой сам путь. Эндпоинт при этом поднимался и на
+    # каждый вопрос отвечал «индекса нет».
+    command: ["repowise", "mcp", "--transport", "streamable-http", "--host", "0.0.0.0", "--port", "7338", "/workspaces/product"]
     expose: ["7338"]
 
   # ────────────────────────── Веб-админка ──────────────────────────
@@ -104,8 +104,18 @@ services:
     volumes:
       - workspaces:/workspaces
       - ui-cache:/root/.cache/repowise
-    working_dir: /workspaces
-    command: ["repowise", "serve", "--host", "0.0.0.0", "--port", "7337"]
+    # Рабочий каталог — КОРЕНЬ workspace: иначе serve не увидит ни одного
+    # репозитория и админка откроется пустой.
+    working_dir: /workspaces/contour
+    # `4` на stdin — выбор «no chat/search» в интерактивном опроснике, который
+    # serve задаёт при отсутствии ключа провайдера. Без TTY он не получает
+    # ответа и ПАДАЕТ с «Aborted!»: контейнер выглядит как переживший рестарт,
+    # хотя админка не поднималась ни разу.
+    #
+    # Когда ключ провайдера задан, опросника нет вовсе и ввод игнорируется —
+    # строка безвредна в обоих режимах. Номер варианта завязан на версию
+    # пакета: при обновлении repowise сверить (docs/repowise/runbook.md).
+    command: ["sh", "-c", "printf '4\n' | exec repowise serve --host 0.0.0.0 --port 7337"]
     expose: ["7337"]
     healthcheck:
       test: ["CMD-SHELL", "curl -fsS http://localhost:7337/health || exit 1"]
@@ -187,6 +197,11 @@ services:
     # ДОЛЛАРЫ В BCRYPT-ХЭШЕ УДВАИВАТЬ: compose интерполирует значения env-файла,
     # иначе хэш доедет обрезанным и вход будет отвергать верный пароль при
     # внешне исправном контейнере.
+    # REPOWISE_API_KEY нужен и входу: он подставляет его в Authorization для
+    # repowise, потому что собственный basic_auth этот заголовок занимает
+    # (см. Caddyfile).
+    environment:
+      REPOWISE_API_KEY: "${REPOWISE_API_KEY:?задай REPOWISE_API_KEY}"
     env_file:
       - path: ./caddy.env
         required: false

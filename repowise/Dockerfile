@@ -14,8 +14,15 @@
 #    не то место, где хочется получить другое поведение от свежего релиза.
 FROM python:3.11-slim
 
+# Node нужен ТОЛЬКО веб-админке: `repowise serve` поднимает API на Python, а
+# интерфейс — отдельным процессом на Node. Без него serve работает, но пишет в
+# лог «To get the web UI, install Node.js 20+» и отдаёт голый API, а корень
+# домена возвращает 404 — админка выглядит сломанной, хотя сервис исправен.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-      git ca-certificates curl \
+      git ca-certificates curl gnupg \
+    && curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
+    && apt-get install -y --no-install-recommends nodejs \
+    && apt-get purge -y gnupg && apt-get autoremove -y \
     && rm -rf /var/lib/apt/lists/*
 
 ARG REPOWISE_VERSION=0.44.0

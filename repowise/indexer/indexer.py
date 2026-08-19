@@ -117,18 +117,16 @@ def head_sha(repo_dir: Path) -> str:
     return (result.stdout or "").strip()
 
 
-def write_primary_marker(workspace: str, primary: Path) -> None:
-    """Записать alias первичного репозитория в корень workspace.
+def set_default_repo(root: Path, alias: str) -> None:
+    """Назначить репозиторий по умолчанию — тот, на который падает запрос без alias.
 
-    MCP-эндпоинту нужен путь именно к первичному репозиторию: конфигурация
-    workspace лежит в его `.repowise`, и оттуда сервер узнаёт про остальные.
-    Вычислять его в compose через `ls | head -1` нельзя — сортировка каталога
-    не совпадает с порядком в списке состава, а первый в списке выбран
-    осознанно (запрос без alias падает на него, правило R4).
+    `repowise init` на корне назначает умолчанием ПЕРВЫЙ ПО АЛФАВИТУ репозиторий
+    (проверено: на contour им оказался `poh-bft-writer`). Правило R4 требует
+    другого: умолчанием должен быть первый в списке состава, выбранный
+    осознанно, — иначе вопрос без alias уедет в случайный репозиторий, и агент
+    об этом не узнает.
     """
-    root = WORKSPACES_ROOT / workspace
-    root.mkdir(parents=True, exist_ok=True)
-    (root / ".primary").write_text(primary.name, encoding="utf-8")
+    run(["repowise", "workspace", "set-default", alias], cwd=root, check=False)
 
 
 def write_sync_state(repo_dir: Path) -> None:
@@ -183,25 +181,30 @@ def bootstrap(workspace: str) -> None:
     if not cloned:
         raise RuntimeError(f"{workspace}: не склонирован ни один репозиторий")
 
-    primary, rest = cloned[0], cloned[1:]
-    write_primary_marker(workspace, primary)
+    root = WORKSPACES_ROOT / workspace
+    primary = cloned[0]
     excludes = [a for pattern in EXCLUDES for a in ("-x", pattern)]
 
-    log(f"{workspace}: структурный индекс {primary.name} (без модели)")
-    run(["repowise", "init", "--no-prose", "-y", *excludes], cwd=primary)
-    write_sync_state(primary)
+    # `init` НА КОРНЕ, а не в первичном репозитории. Корень с несколькими
+    # репозиториями repowise распознаёт сам: создаёт `.repowise-workspace.yaml`
+    # и индексирует все найденные разом.
+    #
+    # Прежний порядок (init внутри первичного, затем `workspace add` на
+    # остальные) не работает вовсе: `workspace add` требует уже созданного
+    # workspace и падает с «No .repowise-workspace.yaml found». На workspace из
+    # ОДНОГО репозитория это не всплывает — `workspace add` там не вызывается,
+    # и ошибка ждёт первого же второго репозитория.
+    log(f"{workspace}: структурный индекс на корне, репозиториев {len(cloned)} (без модели)")
+    run(["repowise", "init", "--no-prose", "-y", *excludes, str(root)], cwd=root)
 
-    for repo in rest:
-        log(f"{workspace}: добавляю {repo.name}")
-        # --no-docs: проза отдельным шагом, см. докстроку модуля.
-        run(["repowise", "workspace", "add", str(repo), "--alias", repo.name,
-             "--no-docs"], cwd=primary, check=False)
+    set_default_repo(root, primary.name)
+    for repo in cloned:
         write_sync_state(repo)
 
     if PROVIDER:
         log(f"{workspace}: проза моделью {PROVIDER}/{MODEL or 'по умолчанию'}")
         run(["repowise", "generate", "--unwritten", "-y", *index_args()],
-            cwd=primary, check=False)
+            cwd=root, check=False)
     else:
         log(f"{workspace}: REPOWISE_PROVIDER не задан — вики остаётся структурной")
 
@@ -222,12 +225,11 @@ def sync(workspace: str) -> None:
     repos = [p for p in sorted(root.glob("*")) if (p / ".git").exists()]
     if not repos:
         return
-    # Порядок из списка состава, а не из каталога: первичным должен остаться
+    # Порядок из списка состава, а не из каталога: умолчанием должен остаться
     # тот же репозиторий, что и при первичной индексации (правило R4).
     order = [e.get("alias") or e["repo"].split("/")[-1] for e in entries]
     repos.sort(key=lambda p: order.index(p.name) if p.name in order else len(order))
     primary = repos[0]
-    write_primary_marker(workspace, primary)
 
     for repo in repos:
         before = head_sha(repo)
@@ -245,9 +247,10 @@ def sync(workspace: str) -> None:
         write_sync_state(repo)
 
     log(f"{workspace}: подхватываю новые репозитории")
-    run(["repowise", "workspace", "scan", "-y"], cwd=primary, check=False)
+    run(["repowise", "workspace", "scan", "-y"], cwd=root, check=False)
+    set_default_repo(root, primary.name)
     log(f"{workspace}: инкрементальное обновление")
-    run(["repowise", "update", "-w", *index_args()], cwd=primary, check=False)
+    run(["repowise", "update", "-w", *index_args()], cwd=root, check=False)
 
 
 def main() -> int:
