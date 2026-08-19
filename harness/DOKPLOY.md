@@ -70,8 +70,14 @@ Caddy внутри разводит один домен на три пути, и
 
 ```
 TEMPORAL_UI_USER=poh
-TEMPORAL_UI_PASSWORD_HASH=a$…   # caddy hash-password --plaintext '<пароль>'
+TEMPORAL_UI_PASSWORD_HASH=$$2a$$14$$…   # доллары УДВОЕНЫ, см. ниже
 ```
+
+Доллары в хэше удваиваются: compose интерполирует значения любого env-файла, и
+`$2a$14$…` доедет до контейнера обрезанным — вход будет отвергать верный
+пароль, а контейнер при этом выглядеть исправным. Проверка:
+`docker exec …-caddy-1 sh -c 'printenv TEMPORAL_UI_PASSWORD_HASH | wc -c'` →
+61 (60 символов и перевод строки).
 
 Хэш считает `docker run --rm caddy:2-alpine caddy hash-password --plaintext
 '<пароль>'`. Без этих переменных caddy не стартует вовсе — это лучше молча
