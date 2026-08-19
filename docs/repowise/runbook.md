@@ -88,37 +88,38 @@ docker compose exec repowise-contour-mcp repowise --version   # ждём 0.44.0+
 Значит эндпоинт запущен **не на том каталоге**. Проверить аргументы процесса:
 
 ```bash
-docker compose exec repowise-product-mcp sh -c 'cat /proc/1/cmdline | tr "\0" " "'
+docker compose exec repowise-contour-mcp sh -c 'cat /proc/1/cmdline | tr "\0" " "'
 ```
 
-Путь обязан оканчиваться именем первичного репозитория, а не корнем workspace:
+Последним аргументом обязан идти КОРЕНЬ workspace:
 
 ```
-… --port 7338 /workspaces/product/poh-demo-checkout    ← верно
-… --port 7338 /workspaces/product/                     ← маркер не прочитан
-… --port 7338                                          ← аргумент потерян
+… --port 7338 /workspaces/contour     ← верно, поднимется в режиме workspace
+… --port 7338                          ← аргумент потерян, сервер взял cwd
 ```
 
-Две причины, обе наблюдались:
+**Почему корень, а не репозиторий.** На корне repowise поднимается в режиме
+workspace и отдаёт на два инструмента больше: `get_architecture`,
+`get_blast_radius` и `list_repos` поверх обычных. В логе это видно строкой
+`Workspace: /workspaces/contour`.
 
-1. **Маркер `.primary` пуст или отсутствует.** Его пишет индексатор в корень
-   workspace при `bootstrap` и на каждом цикле `sync`. Нет маркера — не было
-   успешной индексации: `docker compose run --rm indexer python /app/indexer.py bootstrap`.
-
-2. **Аргумент пути потерян в YAML.** Складка `>` в `docker-compose.yml`
-   СОХРАНЯЕТ перенос строки перед строкой с бо́льшим отступом, и `sh -c`
-   получает две команды вместо одной: `repowise mcp` без пути (то есть на
-   текущем каталоге) и отдельной строкой сам путь. Поэтому `command`
-   MCP-сервисов записан списком в одну строку — не переносить.
+Аргумент теряется, если `command` записан складкой YAML `>`: она СОХРАНЯЕТ
+перенос строки перед строкой с бо́льшим отступом, и `sh -c` получает две
+команды вместо одной. Поэтому `command` MCP-сервисов записан списком.
 
 Проверка, что индекс на месте:
 
 ```bash
-docker compose exec repowise-product-mcp \
-  sh -c 'cd /workspaces/product/$(cat /workspaces/product/.primary) && repowise status'
+docker compose exec repowise-contour-mcp \
+  sh -c 'cd /workspaces/contour && repowise status'
 ```
 
 `Total pages` больше нуля — индекс есть, значит дело в пути.
+
+Нет `.repowise-workspace.yaml` в корне — индексация не проходила либо шла
+старым порядком. Правильный порядок один: `repowise init` НА КОРНЕ, и он сам
+находит все репозитории. `repowise workspace add` требует уже созданного
+workspace и без него падает.
 
 ## Прокси возвращает 421 Invalid Host header
 
@@ -133,6 +134,31 @@ docker compose exec repowise-product-mcp \
 
 Отказ виден в артефакте диалога: ход есть, а в ответе `Invalid Host header`.
 Если он вернулся — смотреть `_loopback_host` в `repowise/proxy/proxy.py`.
+
+## Админка открывается, но пустая
+
+`repowise serve` поднимает ДВА процесса: API на Python (порт 7337) и
+веб-интерфейс на Node (порт 3000). Вход разводит их по путям: `/api/*`,
+`/openapi.json` и `/docs*` идут на API, всё остальное — на интерфейс.
+
+```bash
+docker compose exec repowise-web curl -s -o /dev/null -w '%{http_code}\n' localhost:3000/
+docker compose exec repowise-web curl -s -o /dev/null -w '%{http_code}\n' localhost:7337/health
+```
+
+| Симптом | Причина |
+|---|---|
+| корень отдаёт `404` | интерфейс не поднялся — в образе нет Node.js 20+ (`To get the web UI, install Node.js 20+` в логе) |
+| корень отдаёт `502` | интерфейс ещё качает тарбол (~50 МБ при первом старте) — подождать и повторить |
+| интерфейс открылся, разделы пустые | `/api/*` не доезжает: смотреть `header_up Authorization` в `Caddyfile` |
+| `/api/*` отдаёт `401` при верном пароле | вход не подставил ключ — `REPOWISE_API_KEY` не проброшен в caddy |
+
+**Про заголовок `Authorization`.** Оба слоя доступа пользуются одним
+заголовком: человек предъявляет входу логин с паролем, а repowise ждёт
+`Bearer` со своим ключом. Пробросить исходный заголовок значит отдать repowise
+`Basic …`, на что он отвечает `401` — интерфейс при этом открывается, выглядит
+рабочим и не может получить ни одного ответа от API. Поэтому вход заголовок
+**переписывает**, а не пробрасывает.
 
 ## Админка не пускает при верном пароле
 

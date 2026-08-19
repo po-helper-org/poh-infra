@@ -34,7 +34,14 @@
 	#
 	# Хэш: docker run --rm caddy:2-alpine caddy hash-password --plaintext '<пароль>'
 	# Доллары в хэше УДВАИВАТЬ при записи в env-файл (см. docker-compose.yml).
-	handle {
+	# `repowise serve` поднимает ДВА процесса: API на Python (7337) и веб-интерфейс
+	# на Node (3000). Человеку нужен интерфейс, интерфейсу — API, поэтому корень
+	# идёт на 3000, а всё под /api и /openapi.json — на 7337.
+	#
+	# Ключ API подставляется только на путях API: интерфейсу он не нужен, а
+	# лишний заголовок на статике — повод для вопросов на ревью.
+	@api path /api/* /openapi.json /docs*
+	handle @api {
 		basic_auth {
 			{$REPOWISE_WEB_USER} {$REPOWISE_WEB_PASSWORD_HASH}
 		}
@@ -51,5 +58,13 @@
 			# он уже доказал право входа паролем.
 			header_up Authorization "Bearer {$REPOWISE_API_KEY}"
 		}
+	}
+
+	# Веб-интерфейс — всё остальное.
+	handle {
+		basic_auth {
+			{$REPOWISE_WEB_USER} {$REPOWISE_WEB_PASSWORD_HASH}
+		}
+		reverse_proxy repowise-web:3000
 	}
 }

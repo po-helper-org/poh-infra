@@ -116,7 +116,9 @@ services:
     # строка безвредна в обоих режимах. Номер варианта завязан на версию
     # пакета: при обновлении repowise сверить (docs/repowise/runbook.md).
     command: ["sh", "-c", "printf '4\n' | exec repowise serve --host 0.0.0.0 --port 7337"]
-    expose: ["7337"]
+    # 7337 — API на Python, 3000 — веб-интерфейс на Node. Оба поднимает один
+    # `repowise serve`; наружу не публикуется ни один, вход идёт через caddy.
+    expose: ["7337", "3000"]
     healthcheck:
       test: ["CMD-SHELL", "curl -fsS http://localhost:7337/health || exit 1"]
       interval: 30s
