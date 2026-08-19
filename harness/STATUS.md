@@ -1,89 +1,91 @@
 # Состояние стенда
 
-> Снято 2026-08-18 после сквозного прогона контура на живом репозитории.
+> Снято 2026-08-19 после отладки контура по сценарию демо.
 
 ## Что поднято прямо сейчас
 
-Харнесс работает **локально**, на ноутбуке, вебхуки заведены через туннель.
+Харнесс работает **на сервере**, в Dokploy. Туннель с ноутбука больше не нужен —
+адрес постоянный, и вебхук репозитория настроен на него.
 
 | Что | Где |
 |---|---|
-| Приём вебхуков | `https://runtime-candles-slides-pro.trycloudflare.com/issue/webhook` |
-| Приём докладов агентов | `https://runtime-candles-slides-pro.trycloudflare.com/issue/agent-event` |
-| Temporal UI | http://localhost:8080/temporal/ (напрямую — http://localhost:8233) |
+| Приём вебхуков | `http://harness.stand.example/issue/webhook` |
+| Приём докладов агентов | `.../issue/agent-event` |
+| Temporal UI | `.../temporal/` (basic-auth), напрямую — `ssh -L` на `127.0.0.1:8233` |
 | Демо-репозиторий | https://github.com/po-helper-org/poh-demo-checkout |
 
-Адрес туннеля живёт часы и меняется при перезапуске. За этим следит сторож
-(`scratchpad/tunnel-watchdog.sh`): поднимает туннель заново и переписывает
-адрес в трёх местах — `PUBLIC_URL` харнесса, секрет `ISSUE_AGENT_URL`
-репозитория, `config.url` вебхука. Разошлись — прогон в Actions отработает и
-молча не доложит.
+**Только `http`.** По `https` на этом хосте сертификата нет, и вебхук
+настроен на `http`. GitHub за редиректами вебхука не идёт: 308 на
+`/issue/webhook` выглядел бы как принятая, но никуда не дошедшая доставка.
 
-Сторож проверяет **не «жив ли процесс», а «отвечает ли публичный адрес»**:
-cloudflared переживает разрыв связи с edge и остаётся в памяти, продолжая
-логировать неудачные переподключения. Процесс жив, туннель мёртв, GitHub
-получает 530 — это случилось на прогоне, и в истории доставок видно
-`issues.unlabeled → 530` рядом с успешными.
+Доступ на сервер — `ssh poh-stand`. Каталог сервиса:
+`/etc/dokploy/compose/compose-project/code/harness`.
 
-**Адрес в этом документе мог устареть.** Текущий — в
-`scratchpad/tunnel-url.txt` и в настройках вебхука репозитория.
+## Как выложить правку Issue-Agent
 
-Поднять заново: `docker compose up -d` в этом каталоге. Порядок и грабли —
-[`LOCAL.md`](LOCAL.md).
-
-**Если стенд не отвечает — сначала проверь сам Docker.** `restart: unless-stopped`
-поднимает упавший контейнер, но не помогает, когда останавливается демон целиком:
-за ночь Docker Desktop выключился один раз, и вместе с ним исчез весь стенд.
-Признак — `curl localhost:8080/health` возвращает `000`, а туннель `502`.
+Автодеплой на этот compose не настроен: образы собираются из git-контекста, и
+пересобрать их надо руками.
 
 ```bash
-open -a Docker && until docker info >/dev/null 2>&1; do sleep 5; done
-docker compose up -d
-curl -fsS http://localhost:8080/health
+SHA=$(git rev-parse HEAD)          # в poh-issue-agents, после push
+ssh poh-stand "cd /etc/dokploy/compose/compose-project/code/harness \
+  && sed -i 's|^ISSUE_AGENT_CONTEXT=.*|ISSUE_AGENT_CONTEXT=https://github.com/po-helper-org/poh-issue-agents.git#$SHA|' .env \
+  && docker compose build issue-webhook issue-worker \
+  && docker compose up -d issue-webhook issue-worker"
 ```
 
-Данные переживают перезапуск: история Temporal лежит в томе `pgdata`, и
-припаркованные задачи продолжают с того места, где стояли.
+**Пин на ПОЛНЫЙ SHA обязателен.** BuildKit кэширует клон по URL: после нового
+коммита в ту же ветку `#main` молча соберёт прежний код. Короткий SHA не годится
+вовсе — `repository does not contain ref`.
+
+## Чем опасна выкладка на живой стенд
+
+Прогоны Temporal живут неделями, и рестарт воркера бьёт по ним тремя способами.
+Каждый снаружи выглядит как «агент завис».
+
+1. **Изменил решение воркфлоу — заведи `workflow.patched(...)`.** Ветку, которую
+   прогон уже выбрал, он держит в истории. Новый код на реплее выбирает другую,
+   и Temporal валит прогон: `Nondeterminism error: Activity machine does not
+   handle this event`. Прогон перестаёт отвечать на сигналы вовсе. Проверка
+   после выкладки — `docker logs <worker> | grep -i nondetermin`. Правка тела
+   активности, ретраев и меток безопасна: их в истории нет.
+2. **Долгая активность умирает вместе с воркером.** Heartbeat пропадает, и через
+   `heartbeat_timeout` сервер признаёт её мёртвой. Политика ретраев применяется
+   та, что записана при планировании, — свежая до идущей активности не доедет.
+   Выкладывать между прогонами, а не «сейчас быстро».
+3. **Контейнер агента разработки переживает своего запускателя.** `--rm`
+   срабатывает только на нормальном выходе. После выкладки посмотреть
+   `docker ps | grep openhands` и снять остаток; с версии от 2026-08-19 воркер
+   снимает его сам по имени задачи перед новой попыткой.
+
+## Ресурсы
+
+На сервере ~8 ГБ памяти, из них 2.4 ГБ занимает посторонний
+`temporal-postgresql`. Несколько одновременных `claude -p` плюс контейнер агента
+разработки её выбирают, и стенд начинает ползти — вплоть до того, что
+`docker compose build` не укладывается в десять минут. Признак: `free -m`
+показывает меньше 500 МБ в `available`.
 
 ## Что прогнано вживую
 
-Задача [#1](https://github.com/po-helper-org/poh-demo-checkout/issues/1) прошла
-путь целиком, без ручного вмешательства между шагами:
+Задача [#13](https://github.com/po-helper-org/poh-demo-checkout/issues/13)
+прошла путь от заявки до запуска разработки без касания человека:
 
 | Шаг | Результат |
 |---|---|
-| Триаж | `advisor:feature-request`, `priority:P3`, `phase:classified`, содержательный ответ комментарием |
-| `/analyze` | `IssueAnalysis` в Temporal, цепочка FNR `task → concept → debate → sysreq → validate` |
-| Артефакты | ветка `research/issue-1`, `sa_documentation/FNR/FNR_1/` |
+| Триаж | `advisor:feature-request`, `priority:P2`, содержательный ответ комментарием |
+| Аналитика | автостарт, цепочка FNR `task → concept → debate → sysreq → validate` |
+| Артефакты | ветка `research/issue-13`, `sa_documentation/FNR/FNR_1/` |
+| Декомпозиция | MVP (#14→#15→#16 по зависимостям), GROW (#17), SUPPORT пуст |
 | Передача | `ready-for-dev` + чеклист готовности |
-| Develop | автостарт, диспатч `openhands-resolver.yml` |
-| Разработка | 3 файла, тестов стало 15 вместо 8 |
-| SubIssue | [#4](https://github.com/po-helper-org/poh-demo-checkout/issues/4) заведён самим агентом, `origin:agent`, отранжирован `priority:P1` |
-| PR | [#6](https://github.com/po-helper-org/poh-demo-checkout/pull/6) с `Closes #1` |
-| Ревью | `PR Reviewer Guide 🔍` опубликовано |
-| Фаза | `phase:pr-review` — доклад дошёл и сдвинул состояние сам |
+| Разработка | автостарт, одноразовый контейнер агента на самом стенде |
 
 ## Что осталось не сделано
 
-**Стенд Dokploy живёт на версии до PR #61.** Его `openapi.json` отдаёт только
-`/webhook`; эндпоинта `/agent-event` там нет, и автодеплой после мержа в
-`main` не сработал. Пока это так, на стенде замкнут только Research: доклады
-о PR и ревью приходить некуда, и задача остаётся в `in-development` навсегда.
-
-После деплоя нужны две переменные в Environment — код их не подставит:
-
-```
-AGENT_EVENT_SECRET=<строка из scratchpad/dokploy-env.txt>
-DEVELOP_AUTOSTART=1
-```
-
-Без первой эндпоинт отвечает 503. Это самая дорогая из возможных ошибок
-конфигурации: всё остальное работает, PR открываются, и ни одна задача не
-закрывается — симптом неотличим от зависшего агента разработки.
-
-**PR-Agent как self-hosted сервис нигде не развёрнут.** Ревью в демо гоняется
-CLI-образом pr-agent прямо в прогоне Actions
+**PR-Agent как self-hosted сервис нигде не развёрнут.** Ревью гоняется
+CLI-образом pr-agent прямо в прогоне Actions демо-репозитория
 ([`pr-review.yml`](https://github.com/po-helper-org/poh-demo-checkout/blob/main/.github/workflows/pr-review.yml)):
-двумя входами — вызовом из разработки и по команде `/review` в PR. Доклад в
-цикл идёт тот же. Половина харнесса под PR-Agent готова и включается профилем
-(`docker compose --profile pr up -d`), но требует второго GitHub App.
+три входа — вызов из разработки, событие `pull_request` и команда `/review` в
+PR. Доклад в цикл идёт тем же `/agent-event`. Половина харнесса под PR-Agent
+готова и включается профилем (`docker compose --profile pr up -d`), но требует
+второго GitHub App.
