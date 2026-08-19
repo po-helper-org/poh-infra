@@ -1,0 +1,34 @@
+# Workspace `contour` — «как устроены сами агенты».
+#
+# Правила отбора и alias — docs/repowise/workspaces.md (R1–R9). Коротко:
+# репозиторий состоит ровно в одном workspace, alias равен имени на GitHub без
+# владельца и не сокращается, порог включения — история git и больше 10 файлов.
+#
+# Первый в списке становится репозиторием по умолчанию: запрос без alias падает
+# на него, и это должен быть самый крупный и центральный репозиторий контура.
+
+repos:
+  - repo: po-helper-org/poh-issue-agents
+    alias: poh-issue-agents
+  - repo: po-helper-org/poh-infra
+    alias: poh-infra
+  - repo: po-helper-org/poh-pr-agents
+    alias: poh-pr-agents
+  - repo: po-helper-org/poh-core
+    alias: poh-core
+  - repo: po-helper-org/poh-cortex
+    alias: poh-cortex
+  - repo: po-helper-org/poh-memory-engine
+    alias: poh-memory-engine
+  - repo: po-helper-org/poh-sprint-agents
+    alias: poh-sprint-agents
+  - repo: po-helper-org/poh-bft-writer
+    alias: poh-bft-writer
+  - repo: po-helper-org/poh-scheduller
+    alias: poh-scheduller
+  - repo: po-helper-org/poh-backlog-skills
+    alias: poh-backlog-skills
+
+# НЕ включены по правилу R6 (нет истории либо 10 файлов и меньше — контекста не
+# несут, а шум в list_repos дают):
+#   poh-pr-closer (1 файл), poh-po-task (3), poh-security-agent (2)
