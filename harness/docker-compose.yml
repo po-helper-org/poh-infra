@@ -80,6 +80,22 @@ x-issue-env: &issue-env
   DEVELOP_REF: "${DEVELOP_REF:-main}"
   AGENT_TRIGGER_ALLOWLIST: "${AGENT_TRIGGER_ALLOWLIST:-}"
 
+  # --- Repowise: постоянный индекс кода ---
+  # Пусто — интеграция выключена целиком, и это ШТАТНЫЙ режим: стадия `repowise`
+  # деградирует, пишет артефакт с исходом «источник недоступен» и конвейер идёт
+  # дальше. Сервис живёт отдельным compose (`../repowise/`), контуру виден
+  # только его прокси и только по общей сети.
+  REPOWISE_PROXY_URL: "${REPOWISE_PROXY_URL:-}"
+  REPOWISE_AGENT_TOKEN: "${REPOWISE_AGENT_TOKEN:-}"
+  # Репозитории workspace `contour`. ВНИМАНИЕ: пусто здесь означает «всё
+  # относится к product», а НЕ «всё разрешено», как в ISSUE_AGENT_REPOS.
+  REPOWISE_CONTOUR_REPOS: "${REPOWISE_CONTOUR_REPOS:-}"
+  REPOWISE_MAX_TURNS: "${REPOWISE_MAX_TURNS:-12}"
+  # Сеть, в которой одноразовый контейнер разработки видит прокси. Воркер
+  # передаёт её имя раннеру строкой в `docker run --network`, а тот стартует на
+  # хосте и compose-псевдонимов не знает — поэтому имя, а не ссылка.
+  REPOWISE_NETWORK: "${REPOWISE_NETWORK:-}"
+
   # --- сроки парковок ---
   PARK_DECISION_HOURS: "${PARK_DECISION_HOURS:-72}"
   PARK_CLARIFICATION_HOURS: "${PARK_CLARIFICATION_HOURS:-48}"
@@ -231,6 +247,11 @@ services:
       # минуты и не видит ни GitHub-токена, ни истории Temporal.
       - /var/run/docker.sock:/var/run/docker.sock
     depends_on: [temporal, openhands-runner]
+    # Вторая сеть — та, в которой виден прокси Repowise. Внешняя и общая с
+    # compose сервиса; заводится один раз: `docker network create
+    # poh-repowise-net`. Сервис не поднят — сеть всё равно существует, и
+    # воркер штатно деградирует на проверке доступности.
+    networks: [default, poh-repowise-net]
 
   # ─────────────────────────── PR-Agent ───────────────────────────
 
@@ -370,6 +391,10 @@ services:
 # dokploy-network` один раз, либо убрать `networks` у caddy.
 networks:
   dokploy-network:
+    external: true
+  # Общая с compose сервиса Repowise. В ней виден ТОЛЬКО его прокси —
+  # MCP-эндпоинты и админка остаются за ним и наружу не выходят.
+  poh-repowise-net:
     external: true
 
 volumes:
