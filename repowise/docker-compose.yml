@@ -1,0 +1,278 @@
+# Сервис Repowise — постоянный индекс кода для агентов контура.
+#
+# Отдельный compose, а НЕ расширение `harness/docker-compose.yml`: у сервиса
+# свой жизненный цикл, своё расписание и своя первичная индексация, которая по
+# решению задачи (модификация M4 вердикта дебатов FNR-5) идёт вне контура.
+#
+#   агенты контура ──poh-repowise-net──▶ repowise-proxy ──┬─▶ contour-mcp :7338
+#   (аналитика, OpenHands)                журнал сессий   └─▶ product-mcp :7338
+#                                                                │
+#                              indexer ──────────────────────────┘
+#                              (расписание)        том repowise-workspaces
+#
+#   человек ──▶ caddy (basic_auth) ──▶ repowise-web  (свой домен)
+#
+# ГРАНИЦА ДОСТУПА ПРОХОДИТ ПО СЕТИ, А НЕ ПО СОГЛАШЕНИЮ. Порты MCP-эндпоинтов и
+# веб-интерфейса не публикуются на хост и Traefik про них не знает. Контуру
+# виден ровно один сервис — прокси, и тот требует токен.
+#
+# Запуск:
+#   cp .env.example .env && $EDITOR .env
+#   docker compose build
+#   docker compose run --rm indexer python /app/indexer.py bootstrap   # разово
+#   docker compose up -d
+
+x-repowise-env: &repowise-env
+  REPOWISE_WORKSPACES_ROOT: /workspaces
+  REPOWISE_CONFIG_ROOT: /config
+  REPOWISE_WORKSPACES: "${REPOWISE_WORKSPACES:-contour,product}"
+  # Провайдер модели для генерации страниц вики. Пусто — вики остаётся
+  # структурной: она строится без модели и без трат, и это работоспособный
+  # индекс, а не половина результата.
+  REPOWISE_PROVIDER: "${REPOWISE_PROVIDER:-}"
+  REPOWISE_MODEL: "${REPOWISE_MODEL:-}"
+  # Эмбеддер для семантического поиска. У z.ai эмбеддингов НЕТ (спайк FR-1):
+  # без отдельного ключа поиск деградирует до полнотекстового, а граф, история,
+  # риск и мёртвый код работают в полном объёме.
+  REPOWISE_EMBEDDER: "${REPOWISE_EMBEDDER:-}"
+  OPENAI_API_KEY: "${REPOWISE_LLM_API_KEY:-}"
+  OPENAI_BASE_URL: "${REPOWISE_LLM_BASE_URL:-}"
+  # Ключ эмбеддера. Имя переменной задаёт САМ пакет и зависит от провайдера,
+  # поэтому пробрасываются все три — пустые ничего не включают. Своим именем
+  # (вроде REPOWISE_EMBEDDER_KEY) обойтись нельзя: repowise читает эти.
+  #
+  # Эмбеддер и модель — РАЗНЫЕ вещи и разные ключи: модель пишет прозу страниц,
+  # эмбеддер строит векторный индекс для поиска по смыслу. Один может быть
+  # задан без другого.
+  GEMINI_API_KEY: "${GEMINI_API_KEY:-}"
+  OPENROUTER_API_KEY: "${OPENROUTER_API_KEY:-}"
+  PYTHONUNBUFFERED: "1"
+
+# ЛИМИТЫ ПАМЯТИ ОБЯЗАТЕЛЬНЫ, а не гигиена. Сервис выкладывается на хост, где
+# swap ВЫКЛЮЧЕН, свободной памяти около 200 МБ и живут ЧУЖИЕ боевые сервисы.
+# Без лимита всплеск индексации выбирает память хоста, и OOM-killer выбирает
+# жертву сам — ей может оказаться сосед. С лимитом умирает наш контейнер, и
+# это чинится рестартом и видно в логах.
+#
+# Значения — с запасом к измеренному на отладке. Поднимать по факту нехватки,
+# а не «на всякий случай»: запас, взятый впрок, здесь отнимается у соседа.
+
+services:
+  # ───────────────────────── MCP-эндпоинты ─────────────────────────
+  #
+  # `--host 0.0.0.0` ОБЯЗАТЕЛЕН: значение по умолчанию 127.0.0.1 делает
+  # контейнер недостижимым по сети compose, и выглядит это как молчащий
+  # сервис при исправном процессе (спайк FR-1).
+  #
+  # Порты НЕ публикуются: `expose` открывает их только внутренней сети.
+
+  repowise-contour-mcp:
+    mem_limit: 512m
+    build: .
+    image: poh-repowise:local
+    restart: unless-stopped
+    environment: *repowise-env
+    volumes:
+      - workspaces:/workspaces
+    working_dir: /workspaces/contour
+    # Путь — КОРЕНЬ workspace, не отдельный репозиторий: repowise поднимается
+    # в режиме workspace и отдаёт на два инструмента больше (get_architecture,
+    # get_blast_radius, list_repos поверх обычных).
+    #
+    # Списком, а не строкой: складка YAML `>` сохраняет перенос перед строкой
+    # с бо́льшим отступом, и `sh -c` получал ДВЕ команды — `repowise mcp` без
+    # пути и отдельной строкой сам путь. Эндпоинт при этом поднимался и на
+    # каждый вопрос отвечал «индекса нет».
+    command: ["repowise", "mcp", "--transport", "streamable-http", "--host", "0.0.0.0", "--port", "7338", "/workspaces/contour"]
+    expose: ["7338"]
+
+  repowise-product-mcp:
+    mem_limit: 384m
+    build: .
+    image: poh-repowise:local
+    restart: unless-stopped
+    environment: *repowise-env
+    volumes:
+      - workspaces:/workspaces
+    working_dir: /workspaces/product
+    # Путь — КОРЕНЬ workspace, не отдельный репозиторий: repowise поднимается
+    # в режиме workspace и отдаёт на два инструмента больше (get_architecture,
+    # get_blast_radius, list_repos поверх обычных).
+    #
+    # Списком, а не строкой: складка YAML `>` сохраняет перенос перед строкой
+    # с бо́льшим отступом, и `sh -c` получал ДВЕ команды — `repowise mcp` без
+    # пути и отдельной строкой сам путь. Эндпоинт при этом поднимался и на
+    # каждый вопрос отвечал «индекса нет».
+    command: ["repowise", "mcp", "--transport", "streamable-http", "--host", "0.0.0.0", "--port", "7338", "/workspaces/product"]
+    expose: ["7338"]
+
+  # ────────────────────────── Веб-админка ──────────────────────────
+  #
+  # У `repowise serve` СВОЙ guard: при привязке к не-loopback адресу без
+  # REPOWISE_API_KEY он отвечает 403 (спайк FR-1). Это второй слой доступа
+  # помимо basic_auth на входе, и ключ обязателен.
+  #
+  # `/health` у него открыт и ключа не требует — годится для healthcheck.
+
+  repowise-web:
+    mem_limit: 512m
+    build: .
+    image: poh-repowise:local
+    restart: unless-stopped
+    environment:
+      <<: *repowise-env
+      REPOWISE_API_KEY: "${REPOWISE_API_KEY:?задай REPOWISE_API_KEY (openssl rand -hex 24)}"
+    volumes:
+      - workspaces:/workspaces
+      - ui-cache:/root/.cache/repowise
+    # Рабочий каталог — КОРЕНЬ workspace: иначе serve не увидит ни одного
+    # репозитория и админка откроется пустой.
+    working_dir: /workspaces/contour
+    # `4` на stdin — выбор «no chat/search» в интерактивном опроснике, который
+    # serve задаёт при отсутствии ключа провайдера. Без TTY он не получает
+    # ответа и ПАДАЕТ с «Aborted!»: контейнер выглядит как переживший рестарт,
+    # хотя админка не поднималась ни разу.
+    #
+    # Когда ключ провайдера задан, опросника нет вовсе и ввод игнорируется —
+    # строка безвредна в обоих режимах. Номер варианта завязан на версию
+    # пакета: при обновлении repowise сверить (docs/repowise/runbook.md).
+    command: ["sh", "-c", "printf '4\n' | exec repowise serve --host 0.0.0.0 --port 7337"]
+    # 7337 — API на Python, 3000 — веб-интерфейс на Node. Оба поднимает один
+    # `repowise serve`; наружу не публикуется ни один, вход идёт через caddy.
+    expose: ["7337", "3000"]
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:7337/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+
+  # ──────────────────────────── Прокси ─────────────────────────────
+  #
+  # Единственный сервис в общей с контуром сети. Токен пустым быть не может:
+  # прокси отвечает 503 и вход закрыт — молча открытый доступ к коду всех
+  # репозиториев организации хуже упавшего.
+
+  repowise-proxy:
+    mem_limit: 128m
+    build:
+      context: .
+      dockerfile: Dockerfile.proxy
+    image: poh-repowise-proxy:local
+    restart: unless-stopped
+    environment:
+      REPOWISE_AGENT_TOKEN: "${REPOWISE_AGENT_TOKEN:?задай REPOWISE_AGENT_TOKEN (openssl rand -hex 24)}"
+      REPOWISE_MCP_CONTOUR: "http://repowise-contour-mcp:7338/mcp"
+      REPOWISE_MCP_PRODUCT: "http://repowise-product-mcp:7338/mcp"
+      REPOWISE_SESSIONS_DIR: /sessions
+      REPOWISE_WORKSPACES_ROOT: /workspaces
+      REPOWISE_STALE_AFTER_SEC: "${REPOWISE_STALE_AFTER_SEC:-7200}"
+      PYTHONUNBUFFERED: "1"
+    volumes:
+      - sessions:/sessions
+      # Только на чтение: прокси показывает возраст индекса, но менять его
+      # не должен — писатель ровно один, и это индексатор.
+      - workspaces:/workspaces:ro
+    expose: ["7400"]
+    depends_on: [repowise-contour-mcp, repowise-product-mcp]
+    networks: [default, poh-repowise-net]
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:7400/health',timeout=3).status==200 else 1)\""]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+
+  # ─────────────────────────── Индексатор ──────────────────────────
+  #
+  # Единственный писатель индекса. Первичная индексация — тот же контейнер с
+  # аргументом bootstrap:
+  #   docker compose run --rm indexer python /app/indexer.py bootstrap
+
+  indexer:
+    mem_limit: 768m
+    build: .
+    image: poh-repowise:local
+    restart: unless-stopped
+    environment:
+      <<: *repowise-env
+      REPOWISE_SYNC_INTERVAL: "${REPOWISE_SYNC_INTERVAL:-3600}"
+      REPOWISE_GIT_TOKEN: "${REPOWISE_GIT_TOKEN:-}"
+    volumes:
+      - workspaces:/workspaces
+      - ./workspaces:/config:ro
+    command: ["python", "/app/indexer.py", "sync"]
+
+  # ────────────────────────── Публичный вход ───────────────────────
+  #
+  # Единственный публикуемый наружу сервис. Домен — REPOWISE_PUBLIC_HOST:
+  # имя REPOWISE_HOST занято САМИМ ПАКЕТОМ под адрес привязки сокета
+  # (`repowise mcp --host` читает его по умолчанию), и домен в нём заставил бы
+  # эндпоинт слушать на несуществующем адресе.
+
+  caddy:
+    mem_limit: 64m
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - "${REPOWISE_PORT:-8090}:80"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+    # Учётка отдельным файлом, а не из общего .env: панель Dokploy переписывает
+    # .env на каждом своём деплое, и заведённая мимо панели учётка пропадала бы
+    # молча — вместе со всем входом.
+    #
+    # ДОЛЛАРЫ В BCRYPT-ХЭШЕ УДВАИВАТЬ: compose интерполирует значения env-файла,
+    # иначе хэш доедет обрезанным и вход будет отвергать верный пароль при
+    # внешне исправном контейнере.
+    # REPOWISE_API_KEY нужен и входу: он подставляет его в Authorization для
+    # repowise, потому что собственный basic_auth этот заголовок занимает
+    # (см. Caddyfile).
+    environment:
+      REPOWISE_API_KEY: "${REPOWISE_API_KEY:?задай REPOWISE_API_KEY}"
+    env_file:
+      - path: ./caddy.env
+        required: false
+      - path: /etc/poh-repowise/web-auth.env
+        required: false
+    labels:
+      - traefik.enable=true
+      - traefik.docker.network=dokploy-network
+      - traefik.http.services.poh-repowise.loadbalancer.server.port=80
+      - traefik.http.routers.poh-repowise-web.rule=Host(`${REPOWISE_PUBLIC_HOST:-repowise.localhost}`)
+      - traefik.http.routers.poh-repowise-web.entrypoints=web
+      - traefik.http.routers.poh-repowise-web.service=poh-repowise
+      - traefik.http.routers.poh-repowise-websecure.rule=Host(`${REPOWISE_PUBLIC_HOST:-repowise.localhost}`)
+      - traefik.http.routers.poh-repowise-websecure.entrypoints=websecure
+      - traefik.http.routers.poh-repowise-websecure.service=poh-repowise
+      - traefik.http.routers.poh-repowise-websecure.tls=true
+      - traefik.http.routers.poh-repowise-websecure.tls.certresolver=letsencrypt
+    depends_on: [repowise-web]
+    networks: [default, dokploy-network]
+
+networks:
+  # Общая с контуром производства. Заводится один раз:
+  #   docker network create poh-repowise-net
+  # В ней виден ТОЛЬКО прокси — MCP-эндпоинты остаются за ним.
+  poh-repowise-net:
+    external: true
+  # Сеть Traefik заводится Dokploy'ем. Локальному запуску не нужна:
+  #   docker network create dokploy-network — либо убрать `networks` у caddy.
+  dokploy-network:
+    external: true
+
+volumes:
+  # Клоны репозиториев и `.repowise/` каждого из них. Единственный писатель —
+  # индексатор; остальные монтируют том на чтение.
+  #
+  # `external: true` — потому что на сервер индекс ПРИВОЗЯТ готовым, а не
+  # строят на месте: первичная индексация там не помещается (модификация M4
+  # вердикта FNR-5). Том заводят и наполняют до первого `up`, порядок — в
+  # docs/repowise/deploy.md. Без этого флага compose ругается на «том уже есть,
+  # но создан не мной» при каждом запуске.
+  workspaces:
+    external: true
+    name: "${REPOWISE_WORKSPACES_VOLUME:-poh-repowise_workspaces}"
+  # Журналы диалогов. Из них рендерится repowise-dialog.md.
+  sessions:
+  # Кэш тарбола веб-интерфейса (~50 МБ). Без тома он качается заново на каждый
+  # рестарт, а на стенде исходящий трафик может быть закрыт вовсе.
+  ui-cache:

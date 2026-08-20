@@ -3,3 +3,12 @@
 harness/.env
 # Учётка Temporal UI при локальном запуске (на стенде лежит вне рабочей копии).
 harness/caddy.env
+
+# Python
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# Repowise: локальная учётка входа и окружение сервиса
+repowise/caddy.env
+repowise/.env
