@@ -117,6 +117,25 @@ def head_sha(repo_dir: Path) -> str:
     return (result.stdout or "").strip()
 
 
+WORKSPACE_FILE = ".repowise-workspace.yaml"
+MCP_PATH_FILE = ".mcp-path"
+
+
+def write_mcp_path(root: Path, target: Path) -> None:
+    """Записать путь, который должен обслуживать MCP-эндпоинт.
+
+    Путь не один и тот же для всех workspace, и compose его вычислить не может.
+    Репозиториев ДВА И БОЛЬШЕ — `repowise init` на корне создаёт workspace, и
+    эндпоинт идёт на корень: там режим workspace и два дополнительных
+    инструмента. Репозиторий ОДИН — workspace не создаётся вовсе, индекс живёт
+    внутри репозитория, и эндпоинт идёт туда.
+
+    Разница выяснилась на живом стенде: contour из девяти репозиториев встал
+    сразу, product из одного молча не встал никак.
+    """
+    (root / MCP_PATH_FILE).write_text(str(target), encoding="utf-8")
+
+
 def set_default_repo(root: Path, alias: str) -> None:
     """Назначить репозиторий по умолчанию — тот, на который падает запрос без alias.
 
@@ -198,16 +217,37 @@ def bootstrap(workspace: str) -> None:
     # workspace и падает с «No .repowise-workspace.yaml found». На workspace из
     # ОДНОГО репозитория это не всплывает — `workspace add` там не вызывается,
     # и ошибка ждёт первого же второго репозитория.
-    log(f"{workspace}: структурный индекс на корне, репозиториев {len(cloned)} (без модели)")
     # --embedder передаётся ИМЕННО ЗДЕСЬ, а не только в reindex: значение
     # попадает в конфигурацию репозитория, и по ней MCP-эндпоинт решает,
     # искать по смыслу или по тексту. Без него в конфигурации остаётся `mock`,
-    # и семантический поиск не работает даже при построенных векторах —
-    # эндпоинт отвечает `semantic_search: false` и пустым результатом.
-    run(["repowise", "init", "--no-prose", "-y", *excludes, *embedder_args(),
-         str(root)], cwd=root)
+    # и семантический поиск не работает даже при построенных векторах.
+    init_args = ["repowise", "init", "--no-prose", "-y", *excludes, *embedder_args()]
 
-    set_default_repo(root, primary.name)
+    if len(cloned) > 1:
+        log(f"{workspace}: индекс на корне, репозиториев {len(cloned)} (без модели)")
+        run([*init_args, str(root)], cwd=root)
+    else:
+        # Один репозиторий — workspace не создаётся: `repowise init` на каталоге,
+        # который не является ни git-репозиторием, ни мультирепо-корнем, выходит
+        # с НУЛЁМ, не сделав ничего. Молчаливый no-op, пойманный на стенде.
+        log(f"{workspace}: индекс внутри {primary.name} — workspace из одного "
+            f"репозитория не создаётся")
+        run([*init_args, str(primary)], cwd=primary)
+
+    target = root if (root / WORKSPACE_FILE).exists() else primary
+    if not (root / WORKSPACE_FILE).exists() and not (primary / ".repowise").exists():
+        # Именно здесь ловится тот самый no-op: init отработал, кода возврата
+        # ноль, индекса нет. Без этой проверки эндпоинт поднимется и будет
+        # отвечать «индекса нет» на каждый вопрос, а прокси — исправно
+        # журналировать этот ответ как ход диалога.
+        raise RuntimeError(
+            f"{workspace}: индексация не создала ни workspace в {root}, "
+            f"ни индекса в {primary}")
+    write_mcp_path(root, target)
+    log(f"{workspace}: эндпоинт обслуживает {target}")
+
+    if target == root:
+        set_default_repo(root, primary.name)
     for repo in cloned:
         write_sync_state(repo)
 
@@ -259,11 +299,19 @@ def sync(workspace: str) -> None:
                 + (f", убрано секретов {removed}" if removed else ""))
         write_sync_state(repo)
 
-    log(f"{workspace}: подхватываю новые репозитории")
-    run(["repowise", "workspace", "scan", "-y"], cwd=root, check=False)
-    set_default_repo(root, primary.name)
-    log(f"{workspace}: инкрементальное обновление")
-    run(["repowise", "update", "-w", *index_args()], cwd=root, check=False)
+    # Обновление идёт оттуда же, откуда его читает эндпоинт: для мультирепо это
+    # корень, для одиночного — сам репозиторий.
+    target = root if (root / WORKSPACE_FILE).exists() else primary
+    write_mcp_path(root, target)
+
+    if target == root:
+        log(f"{workspace}: подхватываю новые репозитории")
+        run(["repowise", "workspace", "scan", "-y"], cwd=root, check=False)
+        set_default_repo(root, primary.name)
+        run(["repowise", "update", "-w", *index_args()], cwd=root, check=False)
+    else:
+        run(["repowise", "update", *index_args()], cwd=primary, check=False)
+    log(f"{workspace}: инкрементальное обновление завершено")
 
 
 def main() -> int:
