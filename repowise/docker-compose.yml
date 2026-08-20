@@ -75,15 +75,17 @@ services:
     volumes:
       - workspaces:/workspaces
     working_dir: /workspaces/contour
-    # Путь — КОРЕНЬ workspace, не отдельный репозиторий: repowise поднимается
-    # в режиме workspace и отдаёт на два инструмента больше (get_architecture,
-    # get_blast_radius, list_repos поверх обычных).
+    # Путь берётся из `.mcp-path`, который пишет индексатор, и он НЕ ОДИН И ТОТ
+    # ЖЕ для разных workspace. Репозиториев два и больше — путь ведёт на
+    # корень, где repowise поднимается в режиме workspace и отдаёт на два
+    # инструмента больше. Репозиторий один — workspace не создаётся вовсе, и
+    # путь ведёт внутрь репозитория.
     #
-    # Списком, а не строкой: складка YAML `>` сохраняет перенос перед строкой
-    # с бо́льшим отступом, и `sh -c` получал ДВЕ команды — `repowise mcp` без
+    # Одной строкой: складка YAML `>` сохраняет перенос перед строкой с
+    # бо́льшим отступом, и `sh -c` получал ДВЕ команды — `repowise mcp` без
     # пути и отдельной строкой сам путь. Эндпоинт при этом поднимался и на
     # каждый вопрос отвечал «индекса нет».
-    command: ["repowise", "mcp", "--transport", "streamable-http", "--host", "0.0.0.0", "--port", "7338", "/workspaces/contour"]
+    command: ["sh", "-c", "exec repowise mcp --transport streamable-http --host 0.0.0.0 --port 7338 $$(cat /workspaces/contour/.mcp-path)"]
     expose: ["7338"]
 
   repowise-product-mcp:
@@ -95,15 +97,17 @@ services:
     volumes:
       - workspaces:/workspaces
     working_dir: /workspaces/product
-    # Путь — КОРЕНЬ workspace, не отдельный репозиторий: repowise поднимается
-    # в режиме workspace и отдаёт на два инструмента больше (get_architecture,
-    # get_blast_radius, list_repos поверх обычных).
+    # Путь берётся из `.mcp-path`, который пишет индексатор, и он НЕ ОДИН И ТОТ
+    # ЖЕ для разных workspace. Репозиториев два и больше — путь ведёт на
+    # корень, где repowise поднимается в режиме workspace и отдаёт на два
+    # инструмента больше. Репозиторий один — workspace не создаётся вовсе, и
+    # путь ведёт внутрь репозитория.
     #
-    # Списком, а не строкой: складка YAML `>` сохраняет перенос перед строкой
-    # с бо́льшим отступом, и `sh -c` получал ДВЕ команды — `repowise mcp` без
+    # Одной строкой: складка YAML `>` сохраняет перенос перед строкой с
+    # бо́льшим отступом, и `sh -c` получал ДВЕ команды — `repowise mcp` без
     # пути и отдельной строкой сам путь. Эндпоинт при этом поднимался и на
     # каждый вопрос отвечал «индекса нет».
-    command: ["repowise", "mcp", "--transport", "streamable-http", "--host", "0.0.0.0", "--port", "7338", "/workspaces/product"]
+    command: ["sh", "-c", "exec repowise mcp --transport streamable-http --host 0.0.0.0 --port 7338 $$(cat /workspaces/product/.mcp-path)"]
     expose: ["7338"]
 
   # ────────────────────────── Веб-админка ──────────────────────────

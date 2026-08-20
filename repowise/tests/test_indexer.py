@@ -35,6 +35,37 @@ def idx(tmp_path, monkeypatch):
     return module
 
 
+def _fake_run(made, root=None):
+    """Заглушка внешних команд, повторяющая наблюдаемый эффект `repowise init`.
+
+    Настоящий `init` на корне с двумя и более репозиториями создаёт
+    `.repowise-workspace.yaml`, на одном репозитории — каталог `.repowise`
+    внутри него. Индексатор эти следы проверяет: их отсутствие означает
+    молчаливый no-op, и он должен падать. Заглушка обязана их оставлять,
+    иначе тест проверяет guard, а не то, ради чего написан.
+    """
+    def run(args, cwd=None, check=True):
+        made.append(args)
+        if args[:2] == ["repowise", "init"]:
+            target = Path(args[-1])
+            if root is not None and target == root:
+                (target / ".repowise-workspace.yaml").write_text("version: 1\n",
+                                                                encoding="utf-8")
+            else:
+                (target / ".repowise").mkdir(parents=True, exist_ok=True)
+    return run
+
+
+def _fake_run_with_cwd(made, root=None):
+    """То же, но запоминает и рабочий каталог вызова."""
+    inner = _fake_run([], root)
+
+    def run(args, cwd=None, check=True):
+        made.append((args, str(cwd)))
+        inner(args, cwd, check)
+    return run
+
+
 # --- Секреты в индекс не попадают (R9) ---
 
 def test_scrub_removes_env_and_keys(idx, tmp_path):
@@ -127,7 +158,7 @@ def test_bootstrap_indexes_without_model_then_generates(idx, tmp_path, monkeypat
         (path / ".git").mkdir(parents=True)
 
     monkeypatch.setattr(idx, "head_sha", lambda p: "sha")
-    monkeypatch.setattr(idx, "run", lambda args, cwd=None, check=True: made.append(args) or None)
+    monkeypatch.setattr(idx, "run", _fake_run(made, tmp_path / "workspaces" / "product"))
     monkeypatch.setenv("REPOWISE_PROVIDER", "openai")
     idx.PROVIDER = "openai"
 
@@ -149,7 +180,7 @@ def test_bootstrap_skips_generation_without_provider(idx, tmp_path, monkeypatch)
 
     made = []
     monkeypatch.setattr(idx, "head_sha", lambda p: "sha")
-    monkeypatch.setattr(idx, "run", lambda args, cwd=None, check=True: made.append(args) or None)
+    monkeypatch.setattr(idx, "run", _fake_run(made, tmp_path / "workspaces" / "product"))
     idx.PROVIDER = ""
 
     idx.bootstrap("product")
@@ -221,8 +252,7 @@ def test_bootstrap_inits_at_workspace_root(idx, tmp_path, monkeypatch):
     _two_repo_workspace(idx, tmp_path)
     made = []
     monkeypatch.setattr(idx, "head_sha", lambda p: "sha")
-    monkeypatch.setattr(idx, "run",
-                        lambda args, cwd=None, check=True: made.append((args, str(cwd))))
+    monkeypatch.setattr(idx, "run", _fake_run_with_cwd(made, tmp_path / "workspaces" / "product"))
     idx.PROVIDER = ""
     idx.bootstrap("product")
 
@@ -242,8 +272,7 @@ def test_bootstrap_sets_default_from_the_config_order(idx, tmp_path, monkeypatch
     _two_repo_workspace(idx, tmp_path)
     made = []
     monkeypatch.setattr(idx, "head_sha", lambda p: "sha")
-    monkeypatch.setattr(idx, "run",
-                        lambda args, cwd=None, check=True: made.append((args, str(cwd))))
+    monkeypatch.setattr(idx, "run", _fake_run_with_cwd(made, tmp_path / "workspaces" / "product"))
     idx.PROVIDER = ""
     idx.bootstrap("product")
 
@@ -253,10 +282,13 @@ def test_bootstrap_sets_default_from_the_config_order(idx, tmp_path, monkeypatch
 
 def test_sync_runs_from_the_root_and_keeps_default(idx, tmp_path, monkeypatch):
     _two_repo_workspace(idx, tmp_path)
+    # Workspace уже создан предыдущей первичной индексацией: sync его не
+    # создаёт, а выбирает по нему, откуда обновляться.
+    (tmp_path / "workspaces" / "product" / ".repowise-workspace.yaml").write_text(
+        "version: 1\n", encoding="utf-8")
     made = []
     monkeypatch.setattr(idx, "head_sha", lambda p: "sha")
-    monkeypatch.setattr(idx, "run",
-                        lambda args, cwd=None, check=True: made.append((args, str(cwd))))
+    monkeypatch.setattr(idx, "run", _fake_run_with_cwd(made, tmp_path / "workspaces" / "product"))
     monkeypatch.setattr(idx.subprocess, "run",
                         lambda *a, **k: type("R", (), {"returncode": 0, "stdout": "",
                                                        "stderr": ""})())
@@ -280,7 +312,7 @@ def test_init_carries_the_embedder(idx, tmp_path, monkeypatch):
     _two_repo_workspace(idx, tmp_path)
     made = []
     monkeypatch.setattr(idx, "head_sha", lambda p: "sha")
-    monkeypatch.setattr(idx, "run", lambda args, cwd=None, check=True: made.append(args))
+    monkeypatch.setattr(idx, "run", _fake_run(made, tmp_path / "workspaces" / "product"))
     idx.PROVIDER = ""
     idx.EMBEDDER = "gemini"
     idx.bootstrap("product")
@@ -293,7 +325,7 @@ def test_bootstrap_builds_vectors_when_embedder_set(idx, tmp_path, monkeypatch):
     _two_repo_workspace(idx, tmp_path)
     made = []
     monkeypatch.setattr(idx, "head_sha", lambda p: "sha")
-    monkeypatch.setattr(idx, "run", lambda args, cwd=None, check=True: made.append(args))
+    monkeypatch.setattr(idx, "run", _fake_run(made, tmp_path / "workspaces" / "product"))
     idx.PROVIDER = ""
     idx.EMBEDDER = "gemini"
     idx.bootstrap("product")
@@ -307,7 +339,7 @@ def test_no_vectors_without_embedder(idx, tmp_path, monkeypatch):
     _two_repo_workspace(idx, tmp_path)
     made = []
     monkeypatch.setattr(idx, "head_sha", lambda p: "sha")
-    monkeypatch.setattr(idx, "run", lambda args, cwd=None, check=True: made.append(args))
+    monkeypatch.setattr(idx, "run", _fake_run(made, tmp_path / "workspaces" / "product"))
     idx.PROVIDER = idx.EMBEDDER = ""
     idx.bootstrap("product")
 
