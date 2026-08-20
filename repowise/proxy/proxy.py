@@ -59,6 +59,32 @@ UPSTREAM_TIMEOUT_SEC = float(os.environ.get("REPOWISE_UPSTREAM_TIMEOUT_SEC", "12
 SERVICE_METHODS = {"initialize", "notifications/initialized", "tools/list",
                    "prompts/list", "resources/list", "ping"}
 
+# Имена полей, которые клиент занял под своё и в схеме инструмента принять не
+# может.
+#
+# OpenHands строит на каждый MCP-инструмент свой pydantic-класс действия, а имя
+# `kind` у него занято под тип события. Инструмент, объявивший в схеме
+# собственный `kind`, роняет не себя, а весь прогон: агент падает
+# `TypeError: Field 'kind' ... overrides symbol of same name in a parent class`
+# на первом же ходу — и выходит с НУЛЕВЫМ кодом, не тронув ни одного файла.
+# Снаружи это неотличимо от исправной работы; на стенде так сгорел прогон
+# разработки по issue #56. У Repowise таких инструмента два: `get_dead_code` и
+# `search_codebase`.
+#
+# Поле ПЕРЕИМЕНОВЫВАЕТСЯ, а не выбрасывается вместе с инструментом: без
+# `search_codebase` агент разработки теряет главный способ искать по индексу —
+# то есть смысл всей интеграции. Клиент видит `kind_`, вызов с ним прокси
+# переводит обратно, и сам Repowise ни о какой подмене не знает.
+#
+# Правило заведено по имени ПОЛЯ, а не инструмента: инструменты переименуют с
+# версией пакета, а причина останется прежней. И только тому агенту, который на
+# этом падает, — остальным перечень достаётся нетронутым.
+CLIENT_RESERVED_FIELDS = {"openhands": {"kind"}}
+
+# Чем дополняется занятое имя. Хвост, а не приставка: имя с ведущим
+# подчёркиванием pydantic считает приватным и в схему не пустит вовсе.
+RENAME_SUFFIX = "_"
+
 app = FastAPI(title="repowise-proxy")
 
 
@@ -170,6 +196,100 @@ def _extract_text(body: bytes) -> str:
     return "\n".join(t for t in out if t)
 
 
+def _agent_of(session: str) -> str:
+    """Агент, которому принадлежит сессия. Имя строит контур: `rw-<агент>-…`."""
+    parts = session.split("-")
+    return parts[1] if len(parts) > 2 and parts[0] == "rw" else ""
+
+
+def _map_sse(body: bytes, transform) -> bytes:
+    """Применить преобразование к JSON-RPC внутри тела.
+
+    Транспорт — SSE (`data: {…}`), но у ответа на запрос без потока его может и
+    не быть. Не разобралось — отдаём тело как есть: лучше нетронутый ответ, чем
+    испорченный попыткой починить.
+    """
+    raw = body.decode("utf-8", errors="replace")
+
+    def one(chunk: str) -> str:
+        try:
+            data = json.loads(chunk)
+        except Exception:
+            return chunk
+        changed = transform(data)
+        return json.dumps(changed, ensure_ascii=False) if changed is not None else chunk
+
+    if "data:" not in raw:
+        return one(raw).encode("utf-8")
+
+    out = []
+    for line in raw.splitlines(keepends=True):
+        stripped = line.rstrip("\r\n")
+        if stripped.startswith("data:"):
+            ending = line[len(stripped):]
+            out.append("data: " + one(stripped[len("data:"):].strip()) + ending)
+        else:
+            out.append(line)
+    return "".join(out).encode("utf-8")
+
+
+def _rename_in_schemas(body: bytes, reserved: set[str]) -> tuple[bytes, list[str]]:
+    """Переименовать занятые клиентом поля в перечне инструментов."""
+    touched: list[str] = []
+
+    def transform(data):
+        result = data.get("result")
+        if not isinstance(result, dict) or not isinstance(result.get("tools"), list):
+            return None
+        hit = False
+        for tool in result["tools"]:
+            schema = (tool or {}).get("inputSchema")
+            if not isinstance(schema, dict):
+                continue
+            props = schema.get("properties")
+            if not isinstance(props, dict):
+                continue
+            for name in sorted(reserved & set(props)):
+                new = name + RENAME_SUFFIX
+                if new in props:
+                    # Оба имени заняты — молча слить их значило бы потерять
+                    # одно из полей. Оставляем инструмент как есть: пусть
+                    # падение будет заметным, а не тихим.
+                    continue
+                props[new] = props.pop(name)
+                required = schema.get("required")
+                if isinstance(required, list):
+                    schema["required"] = [new if r == name else r for r in required]
+                touched.append(f"{tool.get('name', '(без имени)')}.{name}")
+                hit = True
+        return data if hit else None
+
+    return _map_sse(body, transform), touched
+
+
+def _restore_in_arguments(body: bytes, reserved: set[str]) -> bytes:
+    """Вернуть исходные имена в аргументах вызова.
+
+    Обратная сторона переименования: наверх уходит то, что Repowise объявлял
+    сам. Иначе агент звал бы инструмент с полем, которого у сервера нет.
+    """
+    def transform(data):
+        if data.get("method") != "tools/call":
+            return None
+        arguments = (data.get("params") or {}).get("arguments")
+        if not isinstance(arguments, dict):
+            return None
+        hit = False
+        for name in sorted(reserved):
+            alias = name + RENAME_SUFFIX
+            if alias in arguments and name not in arguments:
+                arguments[name] = arguments.pop(alias)
+                hit = True
+        return data if hit else None
+
+    return _map_sse(body, transform)
+
+
 # --- Возраст индекса ---
 
 def _index_age() -> list[dict]:
@@ -242,6 +362,9 @@ async def mcp(request: Request, workspace: str = "", session: str = "",
         raise HTTPException(400, "параметр session обязателен")
 
     body = await request.body()
+    reserved = CLIENT_RESERVED_FIELDS.get(_agent_of(session), set())
+    if reserved:
+        body = _restore_in_arguments(body, reserved)
     described = _describe_request(body)
     started = time.time()
 
@@ -257,19 +380,27 @@ async def mcp(request: Request, workspace: str = "", session: str = "",
                           "error": f"эндпоинт недоступен: {exc}"})
         raise HTTPException(502, f"MCP-эндпоинт {workspace} недоступен: {exc}") from exc
 
+    content = upstream.content
+    if described["method"] == "tools/list" and reserved:
+        content, touched = _rename_in_schemas(content, reserved)
+        if touched:
+            print(f"сессия {session}: поля переименованы под клиента "
+                  f"(занято: {', '.join(sorted(reserved))}): "
+                  f"{', '.join(touched)}", flush=True)
+
     if described["method"] not in SERVICE_METHODS:
         _append(session, {
             "ts": started,
             "elapsed_sec": round(time.time() - started, 3),
             "workspace": workspace,
             **described,
-            "response": _extract_text(upstream.content),
-            "bytes": len(upstream.content),
+            "response": _extract_text(content),
+            "bytes": len(content),
         })
 
     passthrough = {k: v for k, v in upstream.headers.items()
                    if k.lower() in {"content-type", "mcp-session-id", "cache-control"}}
-    return Response(content=upstream.content, status_code=upstream.status_code,
+    return Response(content=content, status_code=upstream.status_code,
                     headers=passthrough)
 
 
