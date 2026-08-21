@@ -211,25 +211,34 @@ RFC1918 из подсети контура). В выделенном корпо�
 
 ## Используемые зависимости
 
-Базовые образы с версией из `docker-compose.yml`: `postgres:16`,
-`temporalio/auto-setup:1.24`, `temporalio/ui:2.31.2`, `caddy:2-alpine`.
+| Зависимость | Тип | Версия / источник | Примечание |
+|---|---|---|---|
+| `postgres` | базовый образ | `postgres:16` | готовый, из реестра |
+| `temporal` | базовый образ | `temporalio/auto-setup:1.24` | готовый, из реестра |
+| `temporal-ui` | базовый образ | `temporalio/ui:2.31.2` | готовый, из реестра |
+| `caddy` | базовый образ | `caddy:2-alpine` | готовый, из реестра |
+| `poh-issue-agents` | сборка из git | `ISSUE_AGENT_CONTEXT=…/poh-issue-agents.git#main` | свой репозиторий, сеть сборки должна иметь доступ к GitHub |
+| `poh-pr-agents` | сборка из git | `PR_AGENT_CONTEXT=…/poh-pr-agents.git#main:self-hosted` | свой репозиторий, только профиль `pr` |
+| `qodo-ai/pr-agent` | сборка из git | апстрим, внешний репозиторий | чужой код в цепочке поставки, только профиль `pr` |
+| Node.js, GitHub CLI, Claude Code CLI | пакеты внутри образа `issue-worker` | версии не пинуются в этом репозитории | Claude Code CLI ходит не к Anthropic, см. ниже |
+| Модель | внешний API | `api.z.ai`, ключ `ZAI_API_KEY` | GLM (`glm-4.6`, `glm-4.5-air`), не Anthropic |
+| Sentry | внешний API, опционально | `SENTRY_DSN` | выключен по умолчанию |
+| Let's Encrypt | внешний API, опционально | `acme-v02.api.letsencrypt.org` | только при автовыпуске TLS через Traefik |
 
-Свои образы собираются из git на этапе `build`
-(`ISSUE_AGENT_CONTEXT=…/poh-issue-agents.git#main`, аналогично `PR_AGENT_CONTEXT`
-и апстрим `qodo-ai/pr-agent`) — сеть сборки должна иметь доступ к GitHub, а
-цепочка поставки включает три внешних git-репозитория, два своих и один
-чужой. Для корпоративного контура — зеркалирование во внутренний Git либо
-исключение в политике egress на время сборки.
+Три сборки из git (два своих репозитория, один чужой) требуют доступа сети
+сборки к GitHub в момент `docker compose build` — не только к
+корпоративному реестру образов. Для корпоративного контура — зеркалирование
+источников во внутренний Git либо исключение в политике egress на время
+сборки.
 
-Внутри `issue-worker`: Node.js, GitHub CLI, Claude Code CLI. Часть стадий
-(`BFT_DIRECT_STAGES`) вызывает модель напрямую по HTTP, часть — через
-`claude -p`.
+Внутри `issue-worker` часть стадий (`BFT_DIRECT_STAGES`) вызывает модель
+напрямую по HTTP, часть — через `claude -p`.
 
 **Провайдер модели — z.ai, не Anthropic**, несмотря на имя CLI: и Python-код,
-и CLI обращаются к `api.z.ai` тем же `ZAI_API_KEY`, модели линейки GLM
-(`glm-4.6`, `glm-4.5-air`). Трафика к `api.anthropic.com` нет. Юрисдикция и
-статус провайдера данных, уходящих в промпты (код репозитория, текст Issue) —
-другие, чем при интеграции с Anthropic напрямую.
+и CLI обращаются к `api.z.ai` тем же `ZAI_API_KEY`. Трафика к
+`api.anthropic.com` нет. Юрисдикция и статус провайдера данных, уходящих в
+промпты (код репозитория, текст Issue) — другие, чем при интеграции с
+Anthropic напрямую.
 
 ## Права доступа
 
