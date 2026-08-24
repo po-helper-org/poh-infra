@@ -1,0 +1,126 @@
+# Слой саморефлексии контура — развёртывание рядом с харнессом.
+#
+# Отдельный compose, а НЕ расширение `harness/docker-compose.yml`: у слоя свой
+# жизненный цикл, своё расписание и своя первичная загрузка правил. Ровно по
+# тем же причинам отдельным сделан сервис Repowise.
+#
+# Слой ОПЦИОНАЛЕН. Харнесс без него поднимается и работает как раньше: пустой
+# `MEMORY_BASE_URL` в его `.env` — и ни одного вызова сюда не будет.
+#
+#   агенты харнесса ──harness-memory-net──▶ memory-api :8090
+#                       (Bearer-токен)          │
+#                                               ▼
+#                                     том harness-memory-data
+#                                     (рабочая копия репозитория правил)
+#                                               ▲
+#                          расписание хоста ──▶ memory-reflector
+#
+# Образ собирается ПРЯМО ИЗ git-репозитория: копия исходников рядом не нужна, и
+# версия слоя не может незаметно разойтись с тем, что в main.
+#
+# ВАЖНО про git-контекст: BuildKit кэширует клон по URL, и `build` после нового
+# коммита в ту же ветку может молча собрать прежний код. На стенде пинуй
+# ПОЛНЫЙ SHA — короткий он не находит вовсе.
+#
+# Запуск:
+#   docker network create harness-memory-net   # один раз
+#   cp .env.example .env && $EDITOR .env
+#   docker compose up -d --build
+#
+# Проверка:
+#   docker compose exec memory-api python -c \
+#     "import httpx; print(httpx.get('http://127.0.0.1:8090/health').json())"
+#
+# Разовый проход рефлексии:
+#   docker compose --profile reflect run --rm memory-reflector
+
+x-memory-env: &memory-env
+  MEMORY_ROOT: /data/memory
+  MEMORY_INDEX_PATH: /data/index.db
+  # Обязателен и без умолчания: пустой токен означал бы открытую память
+  # организации. ТОЛЬКО ASCII — значение едет заголовком HTTP.
+  MEMORY_BASE_TOKEN: "${MEMORY_BASE_TOKEN:?задай MEMORY_BASE_TOKEN (только ASCII)}"
+  MEMORY_MAX_ITEMS: "${MEMORY_MAX_ITEMS:-15}"
+  MEMORY_MAX_CHARS: "${MEMORY_MAX_CHARS:-6000}"
+  MEMORY_MATURATION_DAYS: "${MEMORY_MATURATION_DAYS:-7}"
+  MEMORY_OVERDUE_DAYS: "${MEMORY_OVERDUE_DAYS:-2}"
+  MEMORY_CONFIRM_EPISODES: "${MEMORY_CONFIRM_EPISODES:-5}"
+  MEMORY_CONFIRM_DAYS: "${MEMORY_CONFIRM_DAYS:-30}"
+  # Токен GitHub для сбора объективных сигналов об исходе итераций. Пусто —
+  # сигналы помечаются НЕДОСТУПНЫМИ, а не нулевыми: неподключённый источник не
+  # должен опускать оценку каждой итерации.
+  MEMORY_GITHUB_TOKEN: "${MEMORY_GITHUB_TOKEN:-}"
+  # Модель судьи. Пусто — вердикт выносится по числам, без разбора. Рабочий
+  # режим: заземление даёт свёртка сигналов, судья лишь объясняет её.
+  #
+  # Ключ тот же, что у контура, но потребитель НОВЫЙ. Держи проход рефлексии
+  # разведённым по времени с разработкой: один ключ на всё, и одновременные
+  # потребители выбивают ограничение частоты.
+  MEMORY_LLM_BASE_URL: "${MEMORY_LLM_BASE_URL:-}"
+  MEMORY_LLM_API_KEY: "${MEMORY_LLM_API_KEY:-}"
+  MEMORY_LLM_MODEL: "${MEMORY_LLM_MODEL:-glm-4.6}"
+  MEMORY_GIT_COMMIT: "${MEMORY_GIT_COMMIT:-1}"
+  MEMORY_GIT_PUSH: "${MEMORY_GIT_PUSH:-0}"
+  MEMORY_GIT_BRANCH: "${MEMORY_GIT_BRANCH:-main}"
+  PYTHONUNBUFFERED: "1"
+
+# ЛИМИТЫ ПАМЯТИ ОБЯЗАТЕЛЬНЫ, а не гигиена. Стенд — хост, где swap ВЫКЛЮЧЕН,
+# свободно порядка 300 МБ и живут ЧУЖИЕ боевые сервисы. Без лимита всплеск
+# выбирает память хоста, и OOM-killer выбирает жертву сам — ей может оказаться
+# сосед. С лимитом умирает наш контейнер: чинится рестартом и видно в логах.
+#
+# Значения — с запасом к измеренному на соседях того же класса: вебхук контура
+# ест 51 МБ, прокси Repowise 55 МБ при лимите 128 МБ.
+
+services:
+  memory-api:
+    build:
+      context: "${MEMORY_CONTEXT:-https://github.com/po-helper-org/harness-memory-base.git#main}"
+      dockerfile: docker/Dockerfile.api
+    mem_limit: 256m
+    restart: unless-stopped
+    environment: *memory-env
+    volumes:
+      - harness-memory-data:/data
+    # Порт открыт только внутренней сети: память организации — это её правила,
+    # решения и следы работы. Traefik про него не знает.
+    expose:
+      - "8090"
+    networks:
+      - harness-memory-net
+    healthcheck:
+      test: ["CMD", "python", "-c",
+             "import httpx,sys; sys.exit(0 if httpx.get('http://127.0.0.1:8090/health', timeout=3).status_code==200 else 1)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+
+  memory-reflector:
+    build:
+      context: "${MEMORY_CONTEXT:-https://github.com/po-helper-org/harness-memory-base.git#main}"
+      dockerfile: docker/Dockerfile.reflector
+    mem_limit: 512m
+    # Профиль: обычный `up -d` его НЕ поднимает. Это разовый проход, а не
+    # сервис. Ждать созревания сигналов днями внутри живого процесса нельзя —
+    # такой процесс переживёт выкладку и потеряет состояние молча.
+    profiles:
+      - reflect
+    restart: "no"
+    environment: *memory-env
+    volumes:
+      - harness-memory-data:/data
+    networks:
+      - harness-memory-net
+
+volumes:
+  # Рабочая копия репозитория правил и накопленной памяти. Переживает
+  # контейнер; при включённом пуше содержимое дублируется в репозиторий и
+  # переживает даже потерю тома.
+  harness-memory-data:
+
+networks:
+  # Общая с харнессом. Заводится один раз:
+  #   docker network create harness-memory-net
+  harness-memory-net:
+    external: true
