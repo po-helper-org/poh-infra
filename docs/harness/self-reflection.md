@@ -138,6 +138,114 @@ Docker. Порт объявлен через `expose`, а не `ports`, и Traef
 коммита в ту же ветку молча собирает прежний код; короткий SHA он не находит
 вовсе.
 
+## Проверить своими руками
+
+Восемь шагов, каждый с точной командой и с тем, что должно получиться. Порядок
+имеет значение: седьмой и восьмой опираются на первые шесть.
+
+Токен слоя лежит в `/opt/harness-memory/.env`; ниже он подставляется командой,
+а не печатается.
+
+### 1. Слой поднят и знает правила
+
+```bash
+ssh poh-stand 'cd /opt/harness-memory && docker compose exec -T memory-api \
+  python -c "import httpx,json; print(json.dumps(httpx.get(\"http://127.0.0.1:8090/health\").json(), ensure_ascii=False))"'
+```
+
+Ожидается `{"status": "ok", "rules": 25, ...}`. Число правил — это заготовка,
+развёрнутая при первом старте.
+
+### 2. Контур видит слой
+
+```bash
+ssh poh-stand 'cd /etc/dokploy/compose/compose-connect-redundant-system-mzso3q/code/harness && \
+  docker compose exec -T issue-worker python -c "
+from shared import memory
+print(\"включён:\", memory.enabled(), \"| адрес:\", memory.base_url())
+print(\"health:\", memory.health())"'
+```
+
+### 3. Каждая роль получает свои правила
+
+```bash
+ssh poh-stand 'cd /etc/dokploy/compose/compose-connect-redundant-system-mzso3q/code/harness && \
+  docker compose exec -T issue-worker python -c "
+from shared import memory
+for role, who in ((memory.ISSUE,\"IssueAgent\"),(memory.DEVELOP,\"DeveloperAgent\"),
+                  (memory.REVIEW,\"PR-Agent\"),(memory.DELIVERY,\"DeliveryAgent\")):
+    r = memory.rules(role, repo=\"po-helper-org/poh-demo-checkout\")
+    print(f\"{who:15} {role:9} -> {len(r.ids):2} правил, {len(r.text):4} симв.\")"'
+```
+
+Все четыре строки обязаны показать ненулевое число. Роли достаются её правила
+плюс общие из `rules/common/`.
+
+### 4. Выключатель работает
+
+```bash
+ssh poh-stand 'cd /etc/dokploy/compose/compose-connect-redundant-system-mzso3q/code/harness && \
+  docker compose exec -T -e MEMORY_BASE_URL= issue-worker python -c "
+from shared import memory
+print(\"включён:\", memory.enabled(), \"| правил:\", len(memory.rules(memory.DEVELOP).ids))"'
+```
+
+Ожидается `включён: False | правил: 0`. Пустой адрес — ни одного сетевого
+вызова и ни одного изменения в постановках.
+
+### 5. Правила доезжают до агента разработки
+
+Заведи Issue на мелкую доработку в `po-helper-org/poh-demo-checkout` и дождись
+метки `phase:in-development`. Затем:
+
+```bash
+ssh poh-stand 'D=/var/lib/docker/volumes/poh-dev-workspace/_data; \
+  T=$(ls -d $D/dev-*poh-demo-checkout-<НОМЕР> | head -1); \
+  echo "подсыпано правил:"; cat "$T/.reflect-rules.json"; \
+  echo; echo "блок в постановке:"; grep -c "накопленный опыт" "$T/repo/.task.md"'
+```
+
+Перечень правил обязан быть непустым, а блок — присутствовать в постановке.
+
+**Не выкладывай слой во время прогона.** Пересборка приходится на сборку
+постановки, воркер получает `Connection refused` и работает без правил. Это
+штатная деградация, но прогон проходит впустую для проверки.
+
+### 6. Итерация оставляет запись
+
+После открытия пул-реквеста:
+
+```bash
+ssh poh-stand 'cd /opt/harness-memory && docker compose exec -T memory-api \
+  sh -c "ls /data/memory/memory/episodes/*/"'
+```
+
+Запись обязана нести ветку, номер пул-реквеста, модель, число попыток
+активности и перечень подсыпанных правил. Намерение агента — из файла
+`.reflect.md`, который он пишет по требованию в постановке.
+
+### 7. Накопленное уезжает в репозиторий
+
+```bash
+gh api repos/po-helper-org/harness-memory-base/branches/memory/auto \
+  --jq '.name, .commit.commit.message'
+```
+
+Машинная часть памяти живёт в отдельной ветке. На `main` она не пишется
+никогда: там `rules/`, и машина не должна уметь менять то, чем её поправляют.
+
+### 8. Наблюдаемые величины
+
+```bash
+ssh poh-stand 'cd /opt/harness-memory && T=$(grep MEMORY_BASE_TOKEN .env|cut -d= -f2) && \
+  docker compose exec -T -e T="$T" memory-api python -c "
+import httpx,os,json
+print(json.dumps(httpx.get(\"http://127.0.0.1:8090/stats\",
+      headers={\"Authorization\":\"Bearer \"+os.environ[\"T\"]}).json(), ensure_ascii=False, indent=2))"'
+```
+
+Что читать — в таблице ниже, в разделе «Что смотреть после включения».
+
 ## Что смотреть после включения
 
 ```bash
