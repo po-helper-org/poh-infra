@@ -41,6 +41,31 @@ x-issue-env: &issue-env
   ISSUE_AGENT_REPOS: "${WATCHED_REPOS:?задай WATCHED_REPOS}"
   GITHUB_REPOSITORY: "${DEFAULT_REPO:-}"
 
+  # --- GitLab (второй провайдер) ---
+  #
+  # Раскладываются явно, как и GITHUB_* выше. Это не избыточность: compose НЕ
+  # пробрасывает .env целиком, и переменная, забытая в этом блоке, до
+  # контейнера не доедет — молча, без ошибки на старте. Так уже вышло с
+  # WATCHED_REPOS, который внутри зовётся ISSUE_AGENT_REPOS и находится только
+  # здесь.
+  GITLAB_URL: "${GITLAB_URL:-https://gitlab.com}"
+  GITLAB_TOKEN: "${GITLAB_TOKEN:-}"
+  # Какие репозитории обслуживает GitLab-клиент; формат тот же, что у
+  # WATCHED_REPOS. Пусто означает «все идут в GitHub», то есть прежнее
+  # поведение: без явного умолчания проверка допуска на пустом списке
+  # разрешила бы всё и увела весь трафик в GitLab.
+  GITLAB_REPOS: "${GITLAB_REPOS:-}"
+  GITLAB_WEBHOOK_SECRET: "${GITLAB_WEBHOOK_SECRET:-}"
+  # hmac доступен с GitLab 19.0 (GA 19.1), token — везде и слабее. Режим
+  # задаётся явно и не угадывается по заголовкам: угадывание означало бы, что
+  # отправитель сам выбирает, как его проверять.
+  GITLAB_SIGNATURE_MODE: "${GITLAB_SIGNATURE_MODE:-hmac}"
+  # Логин сервисного аккаунта. Поля user.type у GitLab нет вовсе, и по логину
+  # контур отличает свои комментарии от чужих. НЕ ставить сюда логин живого
+  # владельца токена: его собственные задачи будут помечены bot-authored и
+  # пропущены. Проверено на стенде 2026-08-25.
+  GITLAB_BOT_LOGIN: "${GITLAB_BOT_LOGIN:-}"
+
   # --- Temporal (встроенный) ---
   TEMPORAL_ADDRESS: "temporal:7233"
   TEMPORAL_NAMESPACE: "default"
