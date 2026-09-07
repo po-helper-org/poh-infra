@@ -297,10 +297,20 @@ services:
 
   # Образ агента разработки. Как и pr-agent-base — не сервис, а сборка: сам
   # прогон поднимается воркером на время задачи и умирает вместе с ней.
+  #
+  # Собирается из СВОЕГО репозитория (`poh-developer-agents`), а не из
+  # Issue-агента: стадия разработки живёт отдельным релизным циклом, и правка
+  # её образа не должна требовать релиза сервиса, который занят Issue и
+  # аналитикой.
+  #
+  # Плавающий `#main` здесь намеренно. Образ не участвует в replay durable-
+  # воркфлоу — в отличие от кода стадии, который приезжает пакетом и пиннится
+  # тегом, — а пересборка есть осознанное действие оператора. Та же логика,
+  # по которой плавающим `main` тянутся issue-worker и pr-ingress.
   openhands-runner:
     build:
-      context: "${ISSUE_AGENT_CONTEXT:-https://github.com/po-helper-org/poh-issue-agents.git#main}"
-      dockerfile: openhands/Dockerfile
+      context: "${DEVELOPER_AGENT_CONTEXT:-https://github.com/po-helper-org/poh-developer-agents.git#main}"
+      dockerfile: agent/Dockerfile
     image: "${DEVELOP_RUNNER_IMAGE:-poh-openhands-runner:local}"
     entrypoint: ["/bin/true"]
     restart: "no"
