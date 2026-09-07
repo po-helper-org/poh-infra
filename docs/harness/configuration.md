@@ -102,6 +102,7 @@ Issue-Agent → `<PUBLIC_URL>/issue/webhook`, PR-Agent → `<PUBLIC_URL>/pr/webh
 | `DEVELOP_TEST_COMMAND` | нет | пусто = шаг пропускается | Команда прогона тестов после агента и до пуша |
 | `DEVELOP_MODEL` | нет | `openai/glm-4.6` | Модель агента разработки |
 | `DEVELOP_TIMEOUT_SEC` | нет | `2700` | Таймаут одной попытки разработки |
+| `DEVELOP_RUNNER_IMAGE` | нет | `poh-openhands-runner:local` | Тег образа одноразового агента. Воркер запускает контейнер по этому имени, поэтому значение обязано совпадать с тегом сборки `openhands-runner` |
 | `DEVELOP_WORKFLOW_FILE` | нет, только `dispatch` | `openhands-resolver.yml` | Имя workflow-файла в репозитории-цели |
 | `DEVELOP_REF` | нет, только `dispatch` | `main` | Ветка, на которой запускается workflow |
 | `AGENT_TRIGGER_ALLOWLIST` | нет | пусто = разрешено всем | GitHub-логины через запятую, кому доступны дорогие ручные стадии (`run:analyze` и т.п.) |
@@ -135,6 +136,7 @@ Issue-Agent → `<PUBLIC_URL>/issue/webhook`, PR-Agent → `<PUBLIC_URL>/pr/webh
 | `PUBLIC_URL` | нет | `http://localhost:8080` | Адрес, который видят сами сервисы (CORS Temporal UI, сборка адресов вебхуков) |
 | `ISSUE_AGENT_CONTEXT` | нет | `…/poh-issue-agents.git#main` | Откуда собирается образ Issue-Agent — git-URL с `#ref` либо локальный путь |
 | `PR_AGENT_CONTEXT` | нет | `…/poh-pr-agents.git#main:self-hosted` | Откуда собирается образ PR-Agent |
+| `DEVELOPER_AGENT_CONTEXT` | нет | `…/poh-developer-agents.git#main` | Откуда собирается образ агента разработки. Контекст **корневой**: Dockerfile внутри репозитория выбирается ключом `dockerfile:` в compose |
 | `TEMPORAL_SEARCH_ATTRIBUTES` | нет | пусто | Включает единую ленту Temporal от триажа до PR — **только после регистрации атрибутов на кластере**, иначе старт воркфлоу падает |
 | `SENTRY_DSN` | нет | пусто = выключен | Пусто — это же и процедура отката |
 | `SENTRY_ENVIRONMENT` | нет | `harness` | Тег окружения в Sentry |
@@ -151,10 +153,17 @@ Issue-Agent → `<PUBLIC_URL>/issue/webhook`, PR-Agent → `<PUBLIC_URL>/pr/webh
 
 ### Контекст сборки — ловушка кэша BuildKit
 
-`ISSUE_AGENT_CONTEXT` и `PR_AGENT_CONTEXT` задаются **одной строкой целиком**
-— в неё кладут и `https://…git#ветка`, и локальный путь к рабочей копии.
-Раздельные переменные «репозиторий + ветка» здесь не годятся: путь с
-суффиксом `#ref` перестаёт быть путём.
+`ISSUE_AGENT_CONTEXT`, `PR_AGENT_CONTEXT` и `DEVELOPER_AGENT_CONTEXT` задаются
+**одной строкой целиком** — в неё кладут и `https://…git#ветка`, и локальный
+путь к рабочей копии. Раздельные переменные «репозиторий + ветка» здесь не
+годятся: путь с суффиксом `#ref` перестаёт быть путём.
+
+Одна переменная обслуживает **все** сервисы своего репозитория, а нужный файл
+выбирается ключом `dockerfile:` в compose: `ISSUE_AGENT_CONTEXT` собирает три
+образа (`issue-webhook`, `issue-worker` и раньше — раннер),
+`DEVELOPER_AGENT_CONTEXT` — образ агента разработки. Вторая переменная на тот
+же репозиторий завела бы два адреса, обязанных совпадать, а сверить их было бы
+нечем.
 
 BuildKit кэширует git-клон по URL. После нового коммита в ту же ветку
 `docker compose build` может молча собрать **прежний** код — правка уехала в

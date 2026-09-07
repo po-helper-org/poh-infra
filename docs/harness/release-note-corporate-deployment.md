@@ -219,17 +219,30 @@ RFC1918 из подсети контура). В выделенном корпо�
 | `caddy` | базовый образ | `caddy:2-alpine` | готовый, из реестра |
 | `poh-issue-agents` | сборка из git | `ISSUE_AGENT_CONTEXT=…/poh-issue-agents.git#main` | свой репозиторий, сеть сборки должна иметь доступ к GitHub |
 | `poh-pr-agents` | сборка из git | `PR_AGENT_CONTEXT=…/poh-pr-agents.git#main:self-hosted` | свой репозиторий, только профиль `pr` |
+| `poh-developer-agents` | сборка из git | `DEVELOPER_AGENT_CONTEXT=…/poh-developer-agents.git#main` | свой репозиторий, образ одноразового агента разработки; пин плавающий (см. ниже) |
 | `qodo-ai/pr-agent` | сборка из git | апстрим, внешний репозиторий | чужой код в цепочке поставки, только профиль `pr` |
 | Node.js, GitHub CLI, Claude Code CLI | пакеты внутри образа `issue-worker` | версии не пинуются в этом репозитории | Claude Code CLI ходит не к Anthropic, см. ниже |
 | Модель | внешний API | `api.z.ai`, ключ `ZAI_API_KEY` | GLM (`glm-4.6`, `glm-4.5-air`), не Anthropic |
 | Sentry | внешний API, опционально | `SENTRY_DSN` | выключен по умолчанию |
 | Let's Encrypt | внешний API, опционально | `acme-v02.api.letsencrypt.org` | только при автовыпуске TLS через Traefik |
 
-Три сборки из git (два своих репозитория, один чужой) требуют доступа сети
+Четыре сборки из git (три своих репозитория, один чужой) требуют доступа сети
 сборки к GitHub в момент `docker compose build` — не только к
 корпоративному реестру образов. Для корпоративного контура — зеркалирование
 источников во внутренний Git либо исключение в политике egress на время
 сборки.
+
+**Пин образа агента разработки — плавающая ветка, а не тег.**
+`DEVELOPER_AGENT_CONTEXT` указывает на `#main`, то есть `docker compose build`
+берёт то, что лежит в ветке на момент сборки. Это принято сознательно: образ
+одноразового агента не участвует в replay durable-воркфлоу Temporal, а
+пересборка есть явное действие оператора. Код стадии, который в этих
+воркфлоу участвует, приезжает отдельно — python-пакетом с пином по тегу, как
+`poh-delivery-agent` и `poh-howtodemo-agent` в `worker/requirements.txt`.
+
+Для развёртывания, где воспроизводимость сборки обязательна, любой из
+контекстов пиннится на SHA той же строкой:
+`DEVELOPER_AGENT_CONTEXT=…/poh-developer-agents.git#<sha>`.
 
 Внутри `issue-worker` часть стадий (`BFT_DIRECT_STAGES`) вызывает модель
 напрямую по HTTP, часть — через `claude -p`.

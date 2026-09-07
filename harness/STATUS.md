@@ -38,6 +38,19 @@ ssh poh-stand "cd /etc/dokploy/compose/compose-project/code/harness \
 коммита в ту же ветку `#main` молча соберёт прежний код. Короткий SHA не годится
 вовсе — `repository does not contain ref`.
 
+Образ агента разработки собирается из **другого** репозитория и этой командой не
+обновляется. Он пересобирается своей парой переменной и сервиса:
+
+```bash
+SHA=$(git rev-parse HEAD)          # в poh-developer-agents, после push
+ssh poh-stand "cd /etc/dokploy/compose/compose-project/code/harness \
+  && sed -i 's|^DEVELOPER_AGENT_CONTEXT=.*|DEVELOPER_AGENT_CONTEXT=https://github.com/po-helper-org/poh-developer-agents.git#$SHA|' .env \
+  && docker compose build openhands-runner"
+```
+
+Поднимать `openhands-runner` не нужно: это не сервис, а сборка — контейнер
+прогона поднимает воркер на время задачи.
+
 ## Чем опасна выкладка на живой стенд
 
 Прогоны Temporal живут неделями, и рестарт воркера бьёт по ним тремя способами.
