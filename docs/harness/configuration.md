@@ -88,6 +88,7 @@ Issue-Agent → `<PUBLIC_URL>/issue/webhook`, PR-Agent → `<PUBLIC_URL>/pr/webh
 | `ZAI_BASE_URL` | нет | `https://api.z.ai/api/coding/paas/v4` | Эндпоинт API |
 | `MODEL_GATE` | нет | `glm-4.5-air` | Модель первичного триажа Issue |
 | `MODEL_CLASSIFY` | нет | `glm-4.6` | Модель классификации и аналитики (FNR) |
+| `ANTHROPIC_MODEL` | нет | `glm-4.6` | Модель пути `claude -p` (стадии FNR и БФТ). Пустое значение отдаёт выбор провайдеру, а он берёт самую свежую модель — на самом долгом пути контура |
 | `PR_AGENT_MODEL` | нет | `openai/glm-4.6` | Модель ревью PR-Agent |
 
 ## 5. Насколько контур автономен
