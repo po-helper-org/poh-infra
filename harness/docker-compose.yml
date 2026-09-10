@@ -89,7 +89,9 @@ x-issue-env: &issue-env
   # Стадии БФТ, идущие прямыми вызовами модели вместо `claude -p` (каждый его
   # запуск — ~356 МБ RSS). Пусто = прежнее поведение целиком.
   BFT_DIRECT_STAGES: "${BFT_DIRECT_STAGES:-}"
-  BFT_DIRECT_MODEL: "${BFT_DIRECT_MODEL:-glm-4.6}"
+  # Работает только при непустом `BFT_DIRECT_STAGES` выше. Значение — по тому
+  # же замеру, что и остальные модели контура.
+  BFT_DIRECT_MODEL: "${BFT_DIRECT_MODEL:-glm-5.2}"
 
   # --- контур ---
   # Тот же секрет, что у PR-Agent ниже: это две стороны одного канала. Пусто →
