@@ -13,7 +13,7 @@
 - Секреты только в OS Keychain через `docker mcp secret set`. Никогда не писать токены в YAML/Dockerfile/git.
 - Артефакты (Dockerfile, catalog YAML, README) коммитятся в репозиторий `poh-infra`.
 - Не трогать серверы, уже поднятые в gateway `MCP_DOCKER` (Jira/Confluence/Grafana/Obsidian/Fetch) и прямые серверы Claude Code (Temporal/Context7).
-- Существующие профиль `mts_` и каталог `mts:latest` не изменять.
+- Существующие профиль `corp_` и каталог `corp:latest` не изменять.
 - Схема монтажей в catalog-def: `volumes:` + config-параметры с шаблоном `{{param|volume|into}}` / `{{param|volume-target|into}}` (как в официальном `filesystem`).
 
 ## Референсы (проверенные факты)
@@ -48,9 +48,9 @@
 - [ ] Проверить Docker и toolkit:
   - Run: `docker version --format '{{.Server.Version}}' && docker mcp version`
   - Expected: версии печатаются без ошибок.
-- [ ] Зафиксировать текущее состояние (не должно меняться у mts):
+- [ ] Зафиксировать текущее состояние (не должно меняться у corp):
   - Run: `docker mcp profile ls && docker mcp catalog ls`
-  - Expected: виден профиль `mts_` и каталоги `mcp/docker-mcp-catalog:latest`, `mts:latest`.
+  - Expected: виден профиль `corp_` и каталоги `mcp/docker-mcp-catalog:latest`, `corp:latest`.
 - [ ] Commit каркаса артефактов:
   ```bash
   cd /Users/aleksishmanov/projects/poh-org/poh-infra
@@ -134,7 +134,7 @@
 - [ ] Подтвердить точный синтаксис add (CLI-плагин капризен):
   - Run: `docker mcp catalog create poh-org && docker mcp catalog server add poh-org --help 2>&1 | head -20`
   - Expected: usage `catalog server add` с указанием, принимает ли файл спеки или имя сервера.
-- [ ] Описать 5 кастомных серверов в `poh-org.catalog.yaml` по схеме, которую показывает `docker mcp catalog show mts:latest` (поля `name/type/image/description/title/secrets/env/command/volumes`). Ключевые определения:
+- [ ] Описать 5 кастомных серверов в `poh-org.catalog.yaml` по схеме, которую показывает `docker mcp catalog show corp:latest` (поля `name/type/image/description/title/secrets/env/command/volumes`). Ключевые определения:
   - `dokploy`: image `mcp/poh-dokploy:latest`; `env: [{name: DOKPLOY_URL, value: "{{dokploy.url}}"}]`; `secrets: [{name: dokploy.api_key, env: DOKPLOY_API_KEY}]`.
   - `docker`: image `mcp/poh-docker:latest`; `volumes: ["/var/run/docker.sock:/var/run/docker.sock"]`. ⚠️ доступ к Docker-хосту.
   - `repowise`: image `mcp/poh-repowise:latest`; `volumes: ["{{repowise.workdir|volume|into}}"]`; опц. `secrets: [{name: repowise.anthropic_api_key, env: ANTHROPIC_API_KEY}]`.
